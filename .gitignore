@@ -1,0 +1,9 @@
+node_modules/
+logs/
+data/
+screenshots/
+pnpm-lock.yaml
+.env
+*.log
+.DS_Store
+Thumbs.db

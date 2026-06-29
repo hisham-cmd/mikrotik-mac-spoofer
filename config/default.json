@@ -1,0 +1,86 @@
+{
+  "server": {
+    "port": 3003,
+    "host": "0.0.0.0"
+  },
+  "hotspot": {
+    "url": "http://www.h.net/index.html",
+    "loginEndpoint": "/login",
+    "logoutEndpoint": "/logout",
+    "statusEndpoint": "/status",
+    "usernameField": "username",
+    "passwordField": "password",
+    "speedField": "domain",
+    "passwordValue": "",
+    "extraParams": {
+      "var": "callBack"
+    }
+  },
+  "network": {
+    "ssid": "3D Net",
+    "adapterName": "Wi-Fi",
+    "macPrefix": "00:1A:2B",
+    "reconnectDelay": 3000,
+    "spoofRetryCount": 3
+  },
+  "router": {
+    "enabled": true,
+    "host": "",
+    "username": "admin",
+    "password": "",
+    "port": 443,
+    "useSsl": true,
+    "timeout": 5000
+  },
+  "hijack": {
+    "defaultStrategy": "smart-auto",
+    "blockedGatewayMac": "DC:2C:6E:31:06:A2",
+    "sessionWaitMaxSec": 20,
+    "cardLoginMaxCards": 10,
+    "bruteForceMaxTests": 50
+  },
+  "rotation": {
+    "enabled": true,
+    "strategy": "sequential",
+    "quotaThresholdPercent": 90,
+    "quotaPollIntervalMs": 15000,
+    "failureRetryCount": 2,
+    "failureRetryDelayMs": 30000
+  },
+  "proxy": {
+    "enabled": true,
+    "port": 8080,
+    "host": "127.0.0.1"
+  },
+  "logging": {
+    "level": "info",
+    "file": "logs/app.log",
+    "maxSize": 5242880
+  },
+  "profiles": [
+    {
+      "name": "اقتصادية",
+      "domain": "1024K/512K",
+      "price": 100,
+      "timeHours": 4,
+      "transferMB": 400,
+      "validityDays": 3
+    },
+    {
+      "name": "متوسطة",
+      "domain": "1024K/2048K",
+      "price": 250,
+      "timeHours": 9,
+      "transferMB": 1024,
+      "validityDays": 5
+    },
+    {
+      "name": "عالية",
+      "domain": "",
+      "price": null,
+      "timeHours": null,
+      "transferMB": null,
+      "validityDays": null
+    }
+  ]
+}
