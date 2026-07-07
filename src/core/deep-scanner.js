@@ -529,6 +529,25 @@ const deepScanner = {
       } catch (e) { logger.warn(`[SCAN] ⚠️ DNS Reverse فشل: ${e.message}`); }
     }
 
+    // ====== ARP MAC RESOLUTION: بعد TCP/ICMP الـ ARP cache فيه MACs ======
+    if (allHosts.length > 0) {
+      try {
+        const arpOut = await new Promise(r => execFile('arp', ['-a'], { timeout: 5000 }, (e, o) => r(e ? '' : (o || ''))));
+        let resolved = 0;
+        for (const line of arpOut.split('\n')) {
+          const m = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2})/);
+          if (!m) continue;
+          const ip = m[1], mac = m[2].toUpperCase().replace(/-/g, ':');
+          if (mac === '00:00:00:00:00:00' || mac.startsWith('01:00:5E') || mac === 'FF:FF:FF:FF:FF:FF') continue;
+          const host = allHosts.find(h => h.ip === ip);
+          if (host && (!host.hasUniqueMac || host.mac === 'N/A')) {
+            host.mac = mac; host.hasUniqueMac = true; host.vendor = lookupVendor(mac); host.source = 'arp-resolve'; resolved++;
+          }
+        }
+        logger.info(`[SCAN] ✅ ARP MAC Resolution: +${resolved} MAC (إجمالي ${allHosts.filter(h => h.hasUniqueMac).length})`);
+      } catch (e) { logger.warn(`[SCAN] ⚠️ ARP MAC Resolution فشل: ${e.message}`); }
+    }
+
     // ====== POWER SCAN (ننتظر النتيجة بمهلة 180s) ======
     if (powerScanPromise) {
       try {
@@ -561,7 +580,13 @@ const deepScanner = {
         openPorts: '', portCount: 0, source: 'gateway', subnet: gateway.split('.').slice(0, 3).join('.') });
     }
 
-    allHosts.sort((a, b) => {
+    const beforeFilter = allHosts.length;
+    const filteredHosts = allHosts.filter(h => h.isGateway || h.hasUniqueMac);
+
+    const filteredCount = beforeFilter - filteredHosts.length;
+    if (filteredCount > 0) logger.info(`[SCAN] تم تصفية ${filteredCount} جهاز بدون MAC`);
+
+    filteredHosts.sort((a, b) => {
       if (a.isGateway) return -1;
       if (b.isGateway) return 1;
       if (a.hasUniqueMac && !b.hasUniqueMac) return -1;
@@ -569,15 +594,15 @@ const deepScanner = {
       return 0;
     });
 
-    const uniqueCount = allHosts.filter(h => h.hasUniqueMac).length;
-    const behindNAT = allHosts.filter(h => !h.hasUniqueMac && !h.isGateway).length;
+    const uniqueCount = filteredHosts.filter(h => h.hasUniqueMac).length;
+    const behindNAT = filteredHosts.filter(h => !h.hasUniqueMac && !h.isGateway).length;
     const duration = Date.now() - scanStart;
-    logger.info(`[SCAN] ✅ الفحص المحسن: ${allHosts.length} جهاز (${uniqueCount} unique) في ${duration}ms`);
+    logger.info(`[SCAN] ✅ الفحص المحسن: ${filteredHosts.length} جهاز (${uniqueCount} unique) في ${duration}ms`);
     return {
       isSuccess: true,
-      value: { hosts: allHosts, ssid: currentSsid, gateway, ourIp, ourMac,
-        totalFound: allHosts.length, uniqueMacHosts: uniqueCount, behindNATHosts: behindNAT,
-        networkType: allHosts.length > 1 ? 'discovered' : 'arp-cache', source: allHosts.length > 1 ? 'multi' : 'gateway',
+      value: { hosts: filteredHosts, ssid: currentSsid, gateway, ourIp, ourMac,
+        totalFound: filteredHosts.length, uniqueMacHosts: uniqueCount, behindNATHosts: behindNAT,
+        networkType: filteredHosts.length > 1 ? 'discovered' : 'arp-cache', source: filteredHosts.length > 1 ? 'multi' : 'gateway',
         routerDevices, apiAvailable, apiError, hotspot: { detected: false },
         _scanDuration: duration, _scanStart: new Date(scanStart).toLocaleTimeString('ar-SA'), _scanEnd: new Date().toLocaleTimeString('ar-SA') },
       error: null, statusCode: 200,
