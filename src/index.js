@@ -313,8 +313,8 @@ app.get('/api/network/deep-enhanced', async (req, res) => {
   let done = false;
   logger.info(`[REQ] ${req.method} /api/network/deep-enhanced`);
   const timer = setTimeout(() => {
-    if (!done) { done = true; logger.error(`[REQ] ❌ deep-enhanced انتهت المهلة (120s)`); apiResponse(res, { isSuccess: false, value: null, error: 'انتهت مهلة المسح العميق (120 ثانية)', statusCode: 504 }); }
-  }, 120000);
+    if (!done) { done = true; logger.error(`[REQ] ❌ deep-enhanced انتهت المهلة (300s)`); apiResponse(res, { isSuccess: false, value: null, error: 'انتهت مهلة المسح العميق (5 دقائق)', statusCode: 504 }); }
+  }, 300000);
   try {
     const subnet = req.query.subnet || null;
     const timeout = parseInt(req.query.timeout, 10) || 50;

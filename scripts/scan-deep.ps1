@@ -6,7 +6,13 @@ param(
     [Parameter(Mandatory = $false)]
     [int]$SubnetStart = -1,
     [Parameter(Mandatory = $false)]
-    [int]$SubnetEnd = -1
+    [int]$SubnetEnd = -1,
+    [Parameter(Mandatory = $false)]
+    [string]$Gateway = "",
+    [Parameter(Mandatory = $false)]
+    [string]$OurIp = "",
+    [Parameter(Mandatory = $false)]
+    [string]$OurMac = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,18 +36,22 @@ function Is-GatewayMac { param($mac) return $mac -eq '00:00:00:00:00:0E' }
 function Is-MulticastMac { param($mac) return $mac -match '^01:00:5E' -or $mac -eq 'FF:FF:FF:FF:FF:FF' }
 
 try {
-    # Detect network info
-    $route = Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue | Where-Object NextHop -ne "0.0.0.0" | Select-Object -First 1
-    if (-not $route) { throw "No default gateway" }
-    $gatewayIp = $route.NextHop; $result.gateway = $gatewayIp
-    $ifIndex = $route.InterfaceIndex
-    $ipObj = Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -First 1
-    if (-not $ipObj) { throw "No local IP" }
-    $result.ourIp = $ipObj.IPAddress
-    $adapter = Get-NetAdapter -InterfaceIndex $ifIndex -ErrorAction SilentlyContinue
-    if ($adapter) { $result.ourMac = $adapter.MacAddress }
-    $baseNet = ($ipObj.IPAddress -split '\.')[0..1] -join '.'
-    $ourOctet = [int]($ipObj.IPAddress -split '\.')[2]
+    if (-not $Gateway -or -not $OurIp) {
+        $route = Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue | Where-Object NextHop -ne "0.0.0.0" | Select-Object -First 1
+        if (-not $route) { throw "No default gateway" }
+        $Gateway = $route.NextHop; $OurIp = $null
+        $ifIndex = $route.InterfaceIndex
+        $ipObj = Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -First 1
+        if ($ipObj) { $OurIp = $ipObj.IPAddress }
+        $adapter = Get-NetAdapter -InterfaceIndex $ifIndex -ErrorAction SilentlyContinue
+        if ($adapter -and -not $OurMac) { $OurMac = $adapter.MacAddress }
+    }
+    if (-not $Gateway) { throw "No gateway provided" }
+    $gatewayIp = $Gateway; $result.gateway = $gatewayIp
+    $result.ourIp = $OurIp; $result.ourMac = $OurMac
+    $localIp = if ($OurIp) { $OurIp } else { $Gateway }
+    $baseNet = ($localIp -split '\.')[0..1] -join '.'
+    $ourOctet = [int]($localIp -split '\.')[2]
     $gwParts = $gatewayIp -split '\.'; $gwOctet = [int]$gwParts[2]
 
     # Determine which third octets to scan

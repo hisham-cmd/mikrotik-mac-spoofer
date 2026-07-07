@@ -38,7 +38,8 @@ PowerShell Layer (scripts/) ← ARP scan, MAC spoof, WiFi info
 - `src/core/card-bruteforce.js`: تخمين تلقائي لأرقام الكروت (بادئة 262277) مع MAC rotation
 - `src/core/session-hijack.js`: تنسيق الاختراق الكامل + emitStep محمي من circular reference (تمت إعادة الكتابة)
 - `scripts/scan-deep.ps1`: مسح 21 subnet (0-20) عبر TCP port 80 (بدلاً من ICMP) + حفظ ARP
-- `src/core/deep-scanner.js`: multi-subnet scan + subnetStart/End params + fallback ARP
+- `src/core/deep-scanner.js`: multi-subnet scan + subnetStart/End params + fallback ARP + `runPowerfulScan()` لـ Client Isolation
+- `scripts/scan-power.ps1`: فحص خارق — SNMP, REST API, Web scraping, mDNS, NetBIOS, DNS, ICMP sweep, port scan, banner grab
 
 ## V2.0 New Features
 - **Multi-Strategy Hijack Engine**: 5 استراتيجيات اختراق متاحة

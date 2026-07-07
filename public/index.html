@@ -657,7 +657,7 @@ async function scanNetwork(mode){
   btn.disabled=true;otherBtn.disabled=true;
   const isDeep = mode !== 'arp';
   st.textContent = isDeep ? 'جارٍ المسح العميق...' : 'جارٍ مسح ARP...';
-  const scanTimeout = setTimeout(() => { st.textContent = '⏱ تجاوز الوقت!'; stepsEl.style.display = 'none'; btn.disabled = false; otherBtn.disabled = false; }, isDeep ? 60000 : 20000);
+  const scanTimeout = setTimeout(() => { st.textContent = '⏱ تجاوز الوقت!'; stepsEl.style.display = 'none'; btn.disabled = false; otherBtn.disabled = false; }, isDeep ? 300000 : 20000);
   const scanStageLabels = isDeep
     ? [['📡','ARP Cache','قراءة ARP...'],['🔍','API','API الراوتر...'],['🌐','تحليل','تحليل النتائج...']]
     : [['📡','ARP Cache','قراءة ARP...'],['🔍','تحليل','تحليل...']];
@@ -846,7 +846,6 @@ function updateCurrentMac(){
   }).catch(()=>{})
 }
 
-document.getElementById('btnScan').addEventListener('click',scanNetwork);
 document.getElementById('btnResetMac').addEventListener('click',resetMac);
 document.getElementById('btnRefCards').addEventListener('click',loadCards);
 

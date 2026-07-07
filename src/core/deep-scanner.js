@@ -1,4 +1,5 @@
 const { execFile } = require('child_process');
+const net = require('net');
 const path = require('path');
 const logger = require('../utils/logger');
 const MikrotikApi = require('./mikrotik-api');
@@ -7,6 +8,7 @@ const config = require('../../config/default.json');
 
 const SCAN_SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'scan-deep.ps1');
 const FALLBACK_SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'scan-fallback.ps1');
+const POWER_SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'scan-power.ps1');
 
 const mikrotikApi = new MikrotikApi(config.router || {});
 
@@ -16,7 +18,7 @@ function runPowerShell(scriptPath, args) {
       '-NoProfile', '-ExecutionPolicy', 'Bypass',
       '-File', scriptPath, ...args,
     ];
-    execFile('powershell.exe', params, { timeout: 180000 }, (err, stdout, stderr) => {
+    execFile('powershell.exe', params, { timeout: 300000 }, (err, stdout, stderr) => {
       if (err) {
         const stderrMsg = stderr ? stderr.trim().slice(0, 500) : '';
         logger.error('PowerShell exec error', err.message + (stderrMsg ? ' | stderr: ' + stderrMsg : ''));
@@ -212,17 +214,20 @@ function isPotentialHotspotUser(host) {
 }
 
 const deepScanner = {
-  async scan(subnet, timeoutMs = 50, subnetStart = -1, subnetEnd = -1) {
+  async scan(subnet, timeoutMs = 50, subnetStart = -1, subnetEnd = -1, gateway = '', ourIp = '', ourMac = '') {
     const args = [];
     if (subnet) args.push('-Subnet', subnet);
     args.push('-TimeoutMs', timeoutMs.toString());
     if (subnetStart >= 0) args.push('-SubnetStart', subnetStart.toString());
     if (subnetEnd >= 0) args.push('-SubnetEnd', subnetEnd.toString());
+    if (gateway) args.push('-Gateway', gateway);
+    if (ourIp) args.push('-OurIp', ourIp);
+    if (ourMac) args.push('-OurMac', ourMac);
 
     try {
       const raw = await Promise.race([
         runPowerShell(SCAN_SCRIPT, args),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Deep scan timed out')), 120000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Deep scan timed out')), 300000)),
       ]);
       if (!raw.success) {
         return { isSuccess: false, value: null, error: raw.error || 'Deep scan failed', statusCode: 500 };
@@ -315,6 +320,14 @@ const deepScanner = {
     logger.info(`[SCAN] ARP السريع: ${arpDuration}ms, hosts=${arpFast.isSuccess ? arpFast.value.totalFound : 0}`);
     if (arpFast.isSuccess) { gateway = arpFast.value.gateway; ourIp = arpFast.value.ourIp; ourMac = arpFast.value.ourMac; }
 
+    let powerScanPromise = null;
+    if (gateway || ourIp) {
+      const gwPrefix = gateway ? gateway.split('.').slice(0, 3).join('.') : null;
+      const ourPrefix = ourIp ? ourIp.split('.').slice(0, 3).join('.') : null;
+      const powerPrefix = (gwPrefix !== ourPrefix && gwPrefix) ? gwPrefix : (ourPrefix || gwPrefix);
+      powerScanPromise = this.runPowerfulScan(powerPrefix, gateway, ourIp, ourMac);
+    }
+
     const allHosts = arpFast.isSuccess && arpFast.value.hosts ? [...arpFast.value.hosts] : [];
     let apiAvailable = false, apiError = null, routerDevices = [];
 
@@ -355,36 +368,191 @@ const deepScanner = {
       logger.info(`[SCAN] ⚠️ API الراوتر غير متاح (gateway=${gateway})`);
     }
 
-    if (allHosts.length <= 1) {
-      try {
-        const prefix = (gateway || ourIp || currentSsid).split('.').slice(0, 3).join('.');
-        if (prefix && prefix.match(/^\d+\.\d+\.\d+$/)) {
-          logger.info(`[SCAN] بدء تسخين ARP للشبكة ${prefix}.0/24...`);
-          const warm = new Promise(r => execFile('powershell.exe', ['-NoProfile', '-Command',
-            `$b="${prefix}.";$ts=@();1..254|%{$p=[Net.NetworkInformation.Ping]::new();$ip=$b+$_;try{$ts+=$p.SendPingAsync($ip,200)}catch{}};[Threading.Tasks.Task]::WaitAll($ts,6000)|Out-Null`
-          ], { timeout: 10000 }, () => r()));
-          await Promise.race([warm, new Promise(r => setTimeout(r, 8000))]);
-          const warmResult = await new Promise(r => execFile('arp', ['-a'], { timeout: 5000 }, (err, out) => {
-            if (err) { r([]); return; }
-            const seen = new Set(); const found = [];
-            for (const line of ((out || '').split('\n'))) {
-              const m = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9A-F]{2}([-:][0-9A-F]{2}){5})/);
-              if (m && !seen.has(m[1])) { seen.add(m[1]);
-                const ip = m[1], mac = m[2].toUpperCase().replace(/-/g, ':');
-                if (ip === gateway || ip === ourIp) continue;
-                if (mac === '00:00:00:00:00:00' || mac.startsWith('01:00:5E') || mac === 'FF:FF:FF:FF:FF:FF') continue;
-                const proxy = gateway && !allHosts.find(h => h.ip === ip);
-                found.push({ ip, mac, ttl: '', deviceType: proxy ? 'Behind Proxy-ARP' : 'Client Device',
-                  vendor: lookupVendor(mac), isGateway: false, hasUniqueMac: !proxy,
-                  openPorts: '', portCount: 0, source: 'arp-warm', subnet: prefix,
-                  isPotentialHotspotUser: false });
-              }
-            } r(found);
-          }));
-          for (const h of warmResult) if (!allHosts.find(x => x.ip === h.ip)) allHosts.push(h);
-          logger.info(`[SCAN] ✅ ARP بعد التسخين: +${warmResult.length} جهاز في ${Date.now()-scanStart}ms`);
+    const subnetsToScan = new Set();
+    if (ourIp) subnetsToScan.add(ourIp.split('.').slice(0, 3).join('.'));
+    if (gateway) subnetsToScan.add(gateway.split('.').slice(0, 3).join('.'));
+    const prefixes = [...subnetsToScan];
+
+    const pingSubnet = async (prefix) => {
+      const ipList = Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
+      const found = [];
+      for (let b = 0; b < ipList.length; b += 30) {
+        const batch = ipList.slice(b, b + 30);
+        const res = await Promise.all(batch.map(ip => new Promise(r => {
+          execFile('ping', ['-n', '1', '-w', '300', ip], { timeout: 1000 }, e => r(!e));
+        })));
+        for (let j = 0; j < res.length; j++) { if (res[j]) found.push(batch[j]); }
+      }
+      return found;
+    };
+
+    if (prefixes.length > 0) {
+      logger.info(`[SCAN] بدء ICMP Ping Sweep لـ ${prefixes.join(', ')}...`);
+      const results = await Promise.all(prefixes.map(p => pingSubnet(p)));
+      for (let pi = 0; pi < prefixes.length; pi++) {
+        const prefix = prefixes[pi];
+        for (const ip of results[pi]) {
+          if (!allHosts.find(h => h.ip === ip)) {
+            allHosts.push({ ip, mac: 'N/A', ttl: '', deviceType: 'Client Device',
+              vendor: 'Unknown', isGateway: false, hasUniqueMac: false,
+              openPorts: '', portCount: 0, source: 'icmp-sweep', subnet: prefix,
+              isPotentialHotspotUser: true });
+          }
         }
-      } catch (e) { logger.warn(`[SCAN] ⚠️ تسخين ARP فشل: ${e.message}`); }
+        logger.info(`[SCAN] ✅ ICMP Sweep ${prefix}.0/24: +${results[pi].length} جهاز`);
+      }
+    }
+
+    const tcpSubnet = async (prefix) => {
+      const ipList = Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
+      const found = [];
+      for (let b = 0; b < ipList.length; b += 30) {
+        const batch = ipList.slice(b, b + 30);
+        const res = await Promise.all(batch.map(ip => new Promise(r => {
+          const sock = new net.Socket();
+          sock.setTimeout(400);
+          sock.on('connect', () => { sock.destroy(); r(ip); });
+          sock.on('error', () => { sock.destroy(); r(null); });
+          sock.on('timeout', () => { sock.destroy(); r(null); });
+          sock.connect(80, ip);
+        })));
+        for (const ip of res) { if (ip) found.push(ip); }
+      }
+      return found;
+    };
+
+    if (prefixes.length > 0) {
+      logger.info(`[SCAN] بدء TCP Port Scan لـ ${prefixes.join(', ')}...`);
+      const results = await Promise.all(prefixes.map(p => tcpSubnet(p)));
+      for (let pi = 0; pi < prefixes.length; pi++) {
+        const prefix = prefixes[pi];
+        for (const ip of results[pi]) {
+          if (!allHosts.find(h => h.ip === ip)) {
+            allHosts.push({ ip, mac: 'N/A', ttl: '', deviceType: 'Client Device',
+              vendor: 'Unknown', isGateway: false, hasUniqueMac: false,
+              openPorts: '80', portCount: 1, source: 'tcp-scan', subnet: prefix,
+              isPotentialHotspotUser: true });
+          }
+        }
+        logger.info(`[SCAN] ✅ TCP Port Scan ${prefix}.0/24: +${results[pi].length} جهاز`);
+      }
+    }
+
+    if (gateway) {
+      const hotspotPaths = ['/status', '/hotspot/status', '/hotspotlog', '/log', '/hotspot/users'];
+      let hotspotFound = false;
+      const checkPath = async (spath) => {
+        const statusUrl = `http://${gateway}${spath}`;
+        try {
+          const statusHtml = await new Promise(r => execFile('powershell.exe', ['-NoProfile', '-Command',
+            `try{$c=New-Object System.Net.WebClient;$c.Timeout=2000;$t=$c.DownloadString('${statusUrl}');Write-Output $t}catch{}`
+          ], { timeout: 3000 }, (e, o) => r(e ? '' : (o||''))));
+          return { spath, statusHtml, statusUrl };
+        } catch { return { spath, statusHtml: '', statusUrl }; }
+      };
+      logger.info(`[SCAN] فحص ${hotspotPaths.length} مسار hotspot بالتوازي...`);
+      const results = await Promise.allSettled(hotspotPaths.map(checkPath));
+      for (const { value } of results) {
+        if (!value || !value.statusHtml || value.statusHtml.length <= 50) continue;
+        const { statusHtml, statusUrl, spath } = value;
+        hotspotFound = true;
+            const ipMacPairs = [];
+            const ipMacRegex = /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s*[-:]\s*([0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2})/g;
+            let m;
+            while ((m = ipMacRegex.exec(statusHtml)) !== null) {
+              ipMacPairs.push({ ip: m[1], mac: m[2].replace(/-/g, ':').toUpperCase() });
+            }
+            const tableRows = statusHtml.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+            for (const row of tableRows) {
+              const cells = row.match(/<td[^>]*>([\s\S]*?)<\/td>/gi) || [];
+              const vals = cells.map(c => c.replace(/<\/?[^>]+>/g, '').trim()).filter(Boolean);
+              if (vals.length >= 2) {
+                const ipMatch = vals[0].match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
+                const macMatch = vals[1].match(/([0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2})/);
+                if (ipMatch && macMatch) {
+                  ipMacPairs.push({ ip: ipMatch[1], mac: macMatch[1].replace(/-/g, ':').toUpperCase() });
+                }
+              }
+            }
+            const seen = new Set();
+            for (const { ip, mac } of ipMacPairs) {
+              if (seen.has(ip) || ip === gateway || ip === ourIp) continue;
+              seen.add(ip);
+              const exists = allHosts.find(h => h.ip === ip);
+              if (exists) {
+                if (!exists.mac || exists.mac === 'N/A') exists.mac = mac;
+                if (!exists.source || exists.source === 'arp-cache') exists.source = 'hotspot-status';
+                exists.hasUniqueMac = true;
+              } else {
+                allHosts.push({ ip, mac, ttl: '', deviceType: 'Client Device', vendor: lookupVendor(mac),
+                  isGateway: false, hasUniqueMac: true, openPorts: '', portCount: 0,
+                  source: 'hotspot-status', subnet: ip.split('.').slice(0, 3).join('.'),
+                  isPotentialHotspotUser: true });
+              }
+            }
+            if (seen.size > 0) logger.info(`[SCAN] ✅ من ${statusUrl}: +${seen.size} جهاز`);
+          }
+    }
+
+    const dnsSubnet = async (prefix) => {
+      const ipList = Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
+      const found = [];
+      for (let b = 0; b < ipList.length; b += 20) {
+        const batch = ipList.slice(b, b + 20);
+        const res = await Promise.all(batch.map(ip => new Promise(r => {
+          execFile('nslookup', [ip], { timeout: 1000 }, (e, o) => {
+            if (!e && o && (o.includes('Name:') || o.includes('الاسم:'))) r(ip);
+            else r(null);
+          });
+        })));
+        for (const ip of res) { if (ip) found.push(ip); }
+      }
+      return found;
+    };
+
+    if (prefixes.length > 0) {
+      try {
+        logger.info(`[SCAN] بدء DNS Reverse Lookup لـ ${prefixes.join(', ')}...`);
+        const results = await Promise.all(prefixes.map(p => dnsSubnet(p)));
+        for (let pi = 0; pi < prefixes.length; pi++) {
+          const prefix = prefixes[pi];
+          for (const ip of results[pi]) {
+            if (!allHosts.find(h => h.ip === ip)) {
+              allHosts.push({ ip, mac: 'N/A', ttl: '', deviceType: 'Client Device',
+                vendor: 'Unknown', isGateway: false, hasUniqueMac: false,
+                openPorts: '', portCount: 0, source: 'dns-reverse', subnet: prefix,
+                isPotentialHotspotUser: true });
+            }
+          }
+          logger.info(`[SCAN] ✅ DNS Sweep ${prefix}.0/24: +${results[pi].length} اسم مضيف`);
+        }
+      } catch (e) { logger.warn(`[SCAN] ⚠️ DNS Reverse فشل: ${e.message}`); }
+    }
+
+    // ====== POWER SCAN (ننتظر النتيجة بمهلة 180s) ======
+    if (powerScanPromise) {
+      try {
+        const powerResult = await Promise.race([
+          powerScanPromise,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Power scan طويل جداً')), 180000)),
+        ]);
+        if (powerResult && powerResult.hosts.length > 0) {
+          let added = 0;
+          for (const ph of powerResult.hosts) {
+            const exists = allHosts.find(h => h.ip === ph.ip || (h.mac !== 'N/A' && ph.mac !== 'N/A' && h.mac === ph.mac));
+            if (!exists && ph.ip) {
+              allHosts.push(ph); added++;
+            } else if (exists && ph.mac && ph.mac !== 'N/A' && (exists.mac === 'N/A' || exists.mac === '00:00:00:00:00:00')) {
+              exists.mac = ph.mac; exists.vendor = lookupVendor(ph.mac); exists.hasUniqueMac = true; exists.hostname = ph.hostname || exists.hostname;
+            }
+          }
+          logger.info(`[SCAN] ✅ الفحص الخارق: +${added} جهاز جديد (إجمالي ${allHosts.length}), ports=${(powerResult.gatewayPorts||[]).length}, SNMP=${powerResult.snmpCount}, REST=${powerResult.restCount}, Web=${powerResult.webCount}, mDNS=${powerResult.mdnsCount}, NetBIOS=${powerResult.netbiosCount}, DNS=${powerResult.dnsCount}`);
+        } else {
+          logger.info(`[SCAN] ℹ️ الفحص الخارق: ${powerResult ? 'لا أجهزة' : 'فشل'}`);
+        }
+      } catch (e) {
+        logger.warn(`[SCAN] ⚠️ الفحص الخارق: ${e.message}`);
+      }
     }
 
     if (gateway && !allHosts.find(h => h.ip === gateway)) {
@@ -392,6 +560,14 @@ const deepScanner = {
         vendor: 'MikroTik', isGateway: true, hasUniqueMac: false, isPotentialHotspotUser: false,
         openPorts: '', portCount: 0, source: 'gateway', subnet: gateway.split('.').slice(0, 3).join('.') });
     }
+
+    allHosts.sort((a, b) => {
+      if (a.isGateway) return -1;
+      if (b.isGateway) return 1;
+      if (a.hasUniqueMac && !b.hasUniqueMac) return -1;
+      if (!a.hasUniqueMac && b.hasUniqueMac) return 1;
+      return 0;
+    });
 
     const uniqueCount = allHosts.filter(h => h.hasUniqueMac).length;
     const behindNAT = allHosts.filter(h => !h.hasUniqueMac && !h.isGateway).length;
@@ -448,9 +624,9 @@ const deepScanner = {
         try {
           await Promise.race([
             new Promise(r => execFile('powershell.exe', ['-NoProfile', '-Command',
-              `$b="${prefix}.";$ts=@();1..254|%{$p=[Net.NetworkInformation.Ping]::new();$ip=$b+$_;try{$ts+=$p.SendPingAsync($ip,200)}catch{}};[Threading.Tasks.Task]::WaitAll($ts,5000)|Out-Null`
-            ], { timeout: 8000 }, () => r())),
-            new Promise(r => setTimeout(r, 8000)),
+              `$b="${prefix}.";$ts=@();1..254|%{$c=New-Object Net.Sockets.TcpClient;$ts+=$c.ConnectAsync($b+$_,80);Start-Sleep -m 1};Start-Sleep 2;$ts|%{try{$_.Dispose()}catch{}}`
+            ], { timeout: 15000 }, () => r())),
+            new Promise(r => setTimeout(r, 12000)),
           ]);
         } catch (e) {}
       }
@@ -498,6 +674,73 @@ const deepScanner = {
     } catch (err) {
       logger.error(`[SCAN] ❌ ARP Only فشل: ${err.message}`);
       return { isSuccess: false, value: null, error: err.message, statusCode: 500 };
+    }
+  },
+
+  async runPowerfulScan(subnet, gateway, ourIp, ourMac) {
+    const start = Date.now();
+    logger.info(`[POWERSCAN] بدء الفحص الخارق للشبكة ${subnet || gateway}...`);
+    try {
+      const powerArgs = ['-Gateway', gateway || '', '-Subnet', subnet || '', '-TimeoutMs', '500'];
+      if (ourIp) { powerArgs.push('-OurIp', ourIp); }
+      if (ourMac) { powerArgs.push('-OurMac', ourMac); }
+      const raw = await Promise.race([
+        runPowerShell(POWER_SCRIPT, powerArgs),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Power scan timed out')), 300000)),
+      ]);
+      if (!raw.success) {
+        logger.warn(`[POWERSCAN] ❌ فشل: ${raw.error}`);
+        return null;
+      }
+      const rawHosts = raw.hosts || [];
+      const gwPorts = (raw.gatewayPorts || []).join(',');
+      const banners = raw.banners || {};
+      const duration = Date.now() - start;
+      logger.info(`[POWERSCAN] ✅ ${rawHosts.length} جهاز, ${raw.gatewayPorts.length} منفذ بوابة, SNMP:${(raw.snmpDevices||[]).length}, REST:${(raw.restDevices||[]).length}, Web:${(raw.webDevices||[]).length}, mDNS:${Object.keys(raw.mdnsNames||{}).length}, NetBIOS:${Object.keys(raw.netbiosNames||{}).length}, DNS:${Object.keys(raw.dnsNames||{}).length}, Ping:${(raw.pingIps||[]).length} في ${duration}ms`);
+      if (banners && Object.keys(banners).length > 0) {
+        logger.info('[POWERSCAN] 🏷️  البانرات:', JSON.stringify(banners));
+      }
+
+      const prefix = (subnet || gateway || '').split('.').slice(0, 3).join('.');
+      const hosts = rawHosts.map(h => {
+        const mac = h.mac || 'N/A';
+        const vendor = lookupVendor(mac);
+        const isMikrotikMac = mac !== 'N/A' && vendor === 'MikroTik';
+        const isGW = h.ip === gateway;
+        return {
+          ip: h.ip || '',
+          mac,
+          ttl: h.ttl || '',
+          deviceType: h.hostname ? h.hostname : (isGW ? 'MikroTik Router' : (isMikrotikMac ? 'MikroTik Device' : classifyDevice({ ...h, mac, openPorts: gwPorts, macUnique: mac !== 'N/A' && mac !== '00:00:00:00:00:00' }, 0))),
+          vendor,
+          isGateway: isGW,
+          hasUniqueMac: mac !== 'N/A' && mac !== '00:00:00:00:00:00',
+          openPorts: isGW ? gwPorts : '',
+          portCount: isGW ? (raw.gatewayPorts || []).length : 0,
+          source: h.source || 'power-scan',
+          subnet: h.ip ? h.ip.split('.').slice(0, 3).join('.') : prefix,
+          isPotentialHotspotUser: !isGW && !isMikrotikMac && mac !== 'N/A' && mac !== '00:00:00:00:00:00',
+          hostname: h.hostname || '',
+        };
+      });
+
+      return {
+        hosts,
+        gatewayPorts: raw.gatewayPorts || [],
+        banners,
+        snmpCount: (raw.snmpDevices || []).length,
+        restCount: (raw.restDevices || []).length,
+        webCount: (raw.webDevices || []).length,
+        mdnsCount: Object.keys(raw.mdnsNames || {}).length,
+        netbiosCount: Object.keys(raw.netbiosNames || {}).length,
+        dnsCount: Object.keys(raw.dnsNames || {}).length,
+        pingCount: (raw.pingIps || []).length,
+        hotspot: raw.hotspot || { detected: false },
+        _scanDuration: duration,
+      };
+    } catch (err) {
+      logger.warn(`[POWERSCAN] ❌ استثناء: ${err.message}`);
+      return null;
     }
   },
 
