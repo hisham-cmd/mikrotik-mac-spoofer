@@ -8,6 +8,9 @@ const hotspotAuth = require('./core/hotspot-auth');
 if (process.platform === 'win32') {
   execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, '..', 'scripts', 'disable-quickedit.ps1')], { timeout: 5000 }, () => {});
 }
+process.on('uncaughtException', err => logger.error('UNCAUGHT', err.message));
+process.on('unhandledRejection', err => logger.error('UNHANDLED', err && err.message || err));
+
 const proxyServer = require('./core/proxy-server');
 const quotaMonitor = require('./core/quota-monitor');
 const cardRotator = require('./core/card-rotator');
@@ -307,25 +310,34 @@ app.get('/api/network/scan-fallback', async (req, res) => {
 });
 
 app.get('/api/network/deep-enhanced', async (req, res) => {
+  let done = false;
+  logger.info(`[REQ] ${req.method} /api/network/deep-enhanced`);
+  const timer = setTimeout(() => {
+    if (!done) { done = true; logger.error(`[REQ] ❌ deep-enhanced انتهت المهلة (120s)`); apiResponse(res, { isSuccess: false, value: null, error: 'انتهت مهلة المسح العميق (120 ثانية)', statusCode: 504 }); }
+  }, 120000);
   try {
     const subnet = req.query.subnet || null;
-    const timeout = parseInt(req.query.timeout, 10) || 150;
+    const timeout = parseInt(req.query.timeout, 10) || 50;
     const subnetStart = parseInt(req.query.subnetStart, 10);
     const subnetEnd = parseInt(req.query.subnetEnd, 10);
     const result = await deepScanner.enhancedScan(subnet, timeout, isNaN(subnetStart) ? -1 : subnetStart, isNaN(subnetEnd) ? -1 : subnetEnd);
-    scanHistoryStore.recordScan(result);
-    apiResponse(res, result);
+    clearTimeout(timer);
+    if (!done) { done = true; logger.info(`[REQ] ✅ deep-enhanced: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0} source=${result.value ? result.value.source : '?'}`); scanHistoryStore.recordScan(result); apiResponse(res, result); }
   } catch (err) {
-    apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 });
+    clearTimeout(timer);
+    if (!done) { done = true; logger.error(`[REQ] ❌ deep-enhanced خطأ: ${err.message}`); apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 }); }
   }
 });
 
 app.get('/api/network/arp-only', async (req, res) => {
+  logger.info(`[REQ] ${req.method} /api/network/arp-only`);
   try {
     const result = await deepScanner.arpOnly();
+    logger.info(`[REQ] ✅ arp-only: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0}`);
     scanHistoryStore.recordScan(result);
     apiResponse(res, result);
   } catch (err) {
+    logger.error(`[REQ] ❌ arp-only خطأ: ${err.message}`);
     apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 });
   }
 });

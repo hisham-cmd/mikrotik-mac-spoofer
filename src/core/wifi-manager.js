@@ -7,8 +7,8 @@ const SPOOF_SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'spoof-mac.ps1'
 const RESET_SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'reset-mac.ps1');
 const INFO_SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'get-wifi-info.ps1');
 const INFO_TIMEOUT = 30000;
-const RETRY_COUNT = config.network.spoofRetryCount || 3;
-const RECONNECT_DELAY = config.network.reconnectDelay || 3000;
+const RETRY_COUNT = config.network.spoofRetryCount || 2;
+const RECONNECT_DELAY = config.network.reconnectDelay || 1000;
 const MAC_PREFIX = config.network.macPrefix || '00:1A:2B';
 
 const SCRIPT_TIMEOUTS = {
@@ -59,7 +59,10 @@ function generateMac() {
     Math.floor(Math.random() * 16).toString(16)
   ).join('');
   const full = (prefix + suffix).substring(0, 12);
-  return (full.match(/.{2}/g) || []).join(':').toUpperCase();
+  const firstByte = parseInt(full.substring(0, 2), 16);
+  const firstByteLaa = (firstByte | 0x02) & 0xFE;
+  const fixed = firstByteLaa.toString(16).toUpperCase().padStart(2, '0') + full.substring(2);
+  return (fixed.match(/.{2}/g) || []).join(':').toUpperCase();
 }
 
 function validateMac(mac) {
@@ -128,7 +131,7 @@ const wifiManager = {
       } catch (err) {
         logger.warn(`Spoof attempt ${attempt} failed`, err.message);
         if (attempt < RETRY_COUNT) {
-          await new Promise(r => setTimeout(r, 5000));
+          await new Promise(r => setTimeout(r, 2000));
         } else {
           throw new Error(`MAC spoofing failed after ${RETRY_COUNT} attempts: ${err.message}`);
         }
@@ -207,7 +210,7 @@ const wifiManager = {
 
   async _waitForConnection(delayMs) {
     await new Promise(r => setTimeout(r, delayMs));
-    const maxRetries = 20;
+    const maxRetries = 10;
     for (let i = 0; i < maxRetries; i++) {
       try {
         const quick = await this.quickCheck();
@@ -216,7 +219,7 @@ const wifiManager = {
           return;
         }
       } catch {}
-      if (i === 5 || i === 10) {
+      if (i === 3) {
         try {
           const ps = require('child_process').execFileSync('powershell', ['-NoProfile', '-Command', '(Get-NetAdapter -Name \"Wi-Fi\").Status'], { timeout: 3000, encoding: 'utf-8', stdio: 'pipe' });
           if (ps.trim() === 'Up' || ps.trim() === 'Disconnected') {
@@ -225,7 +228,7 @@ const wifiManager = {
           }
         } catch {}
       }
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 500));
     }
     logger.warn('WiFi connection not confirmed after delay');
   },

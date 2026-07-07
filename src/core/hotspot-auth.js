@@ -275,29 +275,42 @@ const hotspotAuth = {
       });
 
       if (response.status >= 400) {
+        logger.warn(`Login HTTP ${response.status} for ${loginUrl.replace(username, '****')}`);
         return { isSuccess: false, value: null, error: `Server returned ${response.status}`, statusCode: response.status };
       }
 
       const html = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
       const status = parseStatusHtml(html);
+      const bodySnippet = html ? html.substring(0, 200).replace(/\n/g, ' ').trim() : '(فارغ)';
 
-      if (status.isLoggedIn || html.includes('تم تسجيل') || html.includes('status.html')) {
+      logger.info(`Login response: HTTP ${response.status} (${html.length}b) snippet: ${bodySnippet}`);
+
+      const sessionAlreadyActive = html.includes('remain_bytes_total') || html.includes('تم تسجيل') || html.includes('status.html');
+      const isLoginPage = (html.includes('username') || html.includes('password') || html.includes('تسجيل الدخول') || html.includes('login')) && html.length < 5000;
+      const isBlocked = html.includes('محظور') || html.includes('block') || html.includes('blocked');
+      const isError = html.includes('خطأ') || html.includes('incorrect') || html.includes('wrong');
+
+      if (sessionAlreadyActive) {
         activeSession = { username: username.toString().trim(), domain, loginTime: new Date().toISOString(), status };
-        logger.info(`Login successful for card ending with ${username.toString().trim().slice(-4)}`);
-        return { isSuccess: true, value: { session: activeSession, status }, error: null, statusCode: 200 };
+        logger.info(`Login successful — جلسة موجودة مسبقاً للـ MAC`);
+        return { isSuccess: true, value: { session: activeSession, status, note: 'session-already-active' }, error: null, statusCode: 200 };
       }
 
-      if (html.includes('محظور') || html.includes('block') || html.includes('blocked')) {
+      if (isBlocked) {
         return { isSuccess: false, value: null, error: 'IP is blocked due to too many failed attempts', statusCode: 403 };
       }
 
-      if (html.includes('خطأ') || html.includes('incorrect') || html.includes('wrong')) {
+      if (isError) {
         return { isSuccess: false, value: null, error: 'Invalid card number', statusCode: 401 };
       }
 
-      activeSession = { username: username.toString().trim(), domain, loginTime: new Date().toISOString(), status };
-      logger.info(`Login assumed successful for ${username.toString().trim().slice(-4)}`);
-      return { isSuccess: true, value: { session: activeSession, status }, error: null, statusCode: 200 };
+      if (isLoginPage) {
+        logger.warn(`Login فشل — الهوتسبوت أعاد صفحة تسجيل الدخول (الكرت غير صالح)`);
+        return { isSuccess: false, value: null, error: 'Login page returned — invalid credentials', statusCode: 401 };
+      }
+
+      logger.warn(`Login فشل — رد غير متوقع (${html.length}b)`, bodySnippet);
+      return { isSuccess: false, value: null, error: `Unexpected response (${html.length}b)`, statusCode: 500 };
     } catch (err) {
       if (err.code === 'ECONNABORTED') {
         return { isSuccess: false, value: null, error: 'Connection timeout - hotspot not reachable', statusCode: 504 };

@@ -56,8 +56,25 @@ PowerShell Layer (scripts/) ← ARP scan, MAC spoof, WiFi info
 - MAC random addresses لبعض العملاء قد لا تكون ثابتة
 - الراوتر لا يدعم REST API ولا API القديم (8728/8729)
 - Session cookie capture عبر proxy server (يتطلب transparent proxy setup معقد)
+- Session Scan: فحص جلسات الهوتسبوت الفعلية لكل جهاز (يتطلب spoof مؤقت لكل MAC)
+
+## V2.2 - Client Classification + Hotspot User Detection
+- **Expanded VENDOR_DB**: 200+ OUI prefixes for Apple, Samsung, Xiaomi, Huawei, TP-Link, Cisco, Intel, etc.
+- **Port-53 transparent proxy fix**: `classifyDevice()` now accepts `port53DevCount`. If >2 devices show port 53, it's considered transparent proxy (MikroTik DNS interception) and won't label devices as "DNS Server".
+- **`isPotentialHotspotUser()`**: New heuristic detects likely hotspot clients by:
+  1. Excluding infrastructure vendors (MikroTik, TP-Link, Cisco, etc.)
+  2. Excluding server ports (22, 443, 8080, 8291, 9090)
+  3. Including known client vendors (Apple, Samsung, etc.)
+  4. Falling back to TTL-based detection (128=Windows, 64=Linux/Mac)
+- **`potentialUserCount`**: Added to scan results for quick reference
+- **Hotspot badges**: `🔥 جلسة محتملة` badge in scan results + MAC devices list
+- **Hotspot filter**: "إظهار الجلسات فقط" toggle in MAC devices panel
+- **Background highlight**: Rows for potential hotspot users are lightly green-tinted
 
 ## Fixed
+- **MAC spoof failure for UAA targets (v2.1)**: `session-hijack.js` كان يمرر `{ noLaaFix: true }` مما يمنع تعديل LAA bit. الـ MAC الهدف مثل `B0:BE:76:2E:35:2E` (UAA, LAA bit = 0) يرفضه Windows. الحل: fallback إلى spoof بدون `noLaaFix` إذا فشلت المحاولة الأولى.
+- **Random MAC generation LAA fix**: `generateMac()` في `wifi-manager.js` يضمن الآن أن الـ MAC المولد له LAA bit = 1 (يقبله Windows).
+- **Spoof script fallbacks**: `spoof-mac.ps1` أضيفت 4 طرق fallback (registry, Set-NetAdapter, WMI, netsh) مع رسالة خطأ واضحة عند الفشل.
 - **LAA bit forcing**: `spoof-mac.ps1` يغير MAC الهدف عند التصيد (AC→AE). أضفنا `-NoLaaFix` لتعطيل تعديل LAA bit عند الاختراق.
 - **MAC restoration on failure**: `session-hijack.js` يستعيد MAC الأصلي تلقائياً عند فشل الاختراق (complete/handleError).
 - **getAdapterInfo instability**: `get-wifi-info.ps1` بُسّط: أزيل `Start-Job`/`Wait-Job` (سبب رئيسي للفشل)، نستخدم `netsh` مباشر.

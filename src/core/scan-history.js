@@ -55,6 +55,7 @@ const scanHistoryStore = {
       vendor: h.vendor || 'Unknown',
       deviceType: h.deviceType || '',
       isGateway: !!h.isGateway,
+      isPotentialHotspotUser: !!h.isPotentialHotspotUser,
       status: h.status || 'alive',
       source: h.source || val.source || 'unknown',
       firstSeen: now,
@@ -210,6 +211,7 @@ const scanHistoryStore = {
           macDetails.set(key, {
             mac: d.mac, hostname: d.hostname || '', vendor: d.vendor || '',
             deviceType: d.deviceType || '', isGateway: !!d.isGateway,
+            isPotentialHotspotUser: !!d.isPotentialHotspotUser,
           });
         } else if (d.hostname && !macDetails.get(key).hostname) {
           macDetails.get(key).hostname = d.hostname;
@@ -219,6 +221,7 @@ const scanHistoryStore = {
           networkGroups.get(networkName).devices.set(key, {
             mac: d.mac, ip: d.ip, hostname: d.hostname || '',
             deviceType: d.deviceType || '', isGateway: !!d.isGateway,
+            isPotentialHotspotUser: !!d.isPotentialHotspotUser,
           });
         }
       });
@@ -240,11 +243,13 @@ const scanHistoryStore = {
       group.devices.forEach((d, key) => {
         const macKey = (d.mac || '').toUpperCase();
         const known = knownMap.get(macKey);
+        const det = macDetails.get(key) || {};
         deviceList.push({
           mac: d.mac, ip: macLastIp.get(key) || d.ip,
-          hostname: d.hostname || macDetails.get(key)?.hostname || '',
-          deviceType: d.deviceType || macDetails.get(key)?.deviceType || '',
+          hostname: d.hostname || det.hostname || '',
+          deviceType: d.deviceType || det.deviceType || '',
           isGateway: d.isGateway, seenCount: macCounts.get(key) || 0,
+          isPotentialHotspotUser: d.isPotentialHotspotUser || det.isPotentialHotspotUser || false,
           firstSeen: known ? known.firstSeen : null,
           lastSeen: known ? known.lastSeen : null,
           lastHijack: known ? known.lastHijack : null,

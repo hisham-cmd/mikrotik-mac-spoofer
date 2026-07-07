@@ -415,11 +415,13 @@
         <option value="desc">⬇ تنازلي</option>
         <option value="asc">⬆ تصاعدي</option>
       </select>
+      <button id="macHotspotFilter" class="btn btn-sm" style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.2);color:#22c55e;font-size:.7rem;padding:4px 10px">🔥 إظهار الجلسات فقط</button>
     </div>
     <div id="macDevicesSummary" style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;font-size:.74rem;color:rgba(255,255,255,0.4)">
       <span>إجمالي الشبكات: <b id="macTotalNetworks" style="color:#818cf8">0</b></span>
       <span>إجمالي الأجهزة: <b id="macTotalDevices" style="color:#22c55e">0</b></span>
       <span>إجمالي الفريدة: <b id="macUniqueDevices" style="color:#a78bfa">0</b></span>
+      <span id="macHotspotCount" style="color:#22c55e;display:none">🔥 الجلسات المحتملة: <b id="macHotspotCountNum">0</b></span>
     </div>
     <div id="macDevicesContainer"><div style="text-align:center;padding:30px;color:rgba(255,255,255,0.25);font-size:.8rem">📡 قم بمسح الشبكة أولاً لرؤية الأجهزة</div></div>
   </div>
@@ -508,7 +510,7 @@
         <option value="api-session">📡 API الراوتر</option>
         <option value="brute-force">⚡ تخمين الكروت</option>
       </select>
-      <div style="font-size:.65rem;color:rgba(255,255,255,0.3);margin-top:4px" id="hjStrategyDesc">🧠 يجرب API الراوتر أولاً، ثم انتظار الجلسة، ثم الكروت، وأخيراً التخمين</div>
+      <div style="font-size:.65rem;color:rgba(255,255,255,0.3);margin-top:4px" id="hjStrategyDesc">🧠 يجرب API الراوتر ← انتظار الجلسة ← التخمين ← وأخيراً الكروت إن وُجدت</div>
     </div>
     <div class="ma"><button class="btn btn-d" id="btnHjCancel">إلغاء</button><button class="btn btn-s" id="btnHjConfirm">🚀 بدء الاختراق</button></div>
   </div>
@@ -653,12 +655,12 @@ async function scanNetwork(mode){
   const st=document.getElementById('scanStat');
   const stepsEl=document.getElementById('scanSteps');
   btn.disabled=true;otherBtn.disabled=true;
-  st.textContent=mode==='arp'?'جارٍ مسح ARP...':'جارٍ المسح العميق...';
-  const scanStageLabels=[
-    ['📡','Ping Sweep','جارٍ مسح العناوين...'],
-    ['🔍','ARP Cache','قراءة جدول ARP...'],
-    ['🌐','تحليل','تحليل الأجهزة...'],
-  ];
+  const isDeep = mode !== 'arp';
+  st.textContent = isDeep ? 'جارٍ المسح العميق...' : 'جارٍ مسح ARP...';
+  const scanTimeout = setTimeout(() => { st.textContent = '⏱ تجاوز الوقت!'; stepsEl.style.display = 'none'; btn.disabled = false; otherBtn.disabled = false; }, isDeep ? 60000 : 20000);
+  const scanStageLabels = isDeep
+    ? [['📡','ARP Cache','قراءة ARP...'],['🔍','API','API الراوتر...'],['🌐','تحليل','تحليل النتائج...']]
+    : [['📡','ARP Cache','قراءة ARP...'],['🔍','تحليل','تحليل...']];
   stepsEl.style.display='flex';
   stepsEl.innerHTML=scanStageLabels.map((s,i)=>`<span class="step run" id="ss${i}"><span class="sicon">${s[0]}</span> ${s[1]}</span>`).join('');
   let si=0;
@@ -675,8 +677,9 @@ async function scanNetwork(mode){
   },800);
 
   try{
-    const url=mode==='arp'?'/api/network/arp-only':'/api/network/deep-enhanced';
+    const url = isDeep ? '/api/network/deep-enhanced' : '/api/network/arp-only';
     const r=await API.get(url+'?timeout=50');
+    clearTimeout(scanTimeout);
     clearInterval(anim);
     scanStageLabels.forEach((_,i)=>{
       const el=document.getElementById('ss'+i);
@@ -688,6 +691,9 @@ async function scanNetwork(mode){
     document.getElementById('sOurIp').textContent=d.ourIp||'-';
     document.getElementById('sOurMac').textContent=d.ourMac||'-';
     document.getElementById('sCount').textContent=d.totalFound||0;
+    const potentialCount=d.potentialUserCount||0;
+    const sCountEl=document.getElementById('sCount');
+    if(potentialCount>0){sCountEl.textContent=d.totalFound+' 🔥'+potentialCount}else{sCountEl.textContent=d.totalFound||0}
     document.getElementById('sSource').textContent=d.source||'-';
     const proxyInfo=document.getElementById('sProxyInfo');
     if(proxyInfo){
@@ -705,15 +711,18 @@ async function scanNetwork(mode){
     else{
       tb.innerHTML=hosts.map((h,i)=>{
         const devColors={'MikroTik':'#f59e0b','Windows Device':'#3b82f6','Linux/Mac Device':'#22c55e','Web Server':'#a78bfa','Client Device':'rgba(255,255,255,0.5)','Unknown':'rgba(255,255,255,0.35)','Named Device':'#a78bfa'};
+        for(const k in devColors){if((h.deviceType||'').startsWith(k)){devColors[k]=devColors[k];break}}
         const vc=devColors[h.deviceType]||'#818cf8';
         const typeIcon=h.isGateway?'🚪':h.hasUniqueMac?'📱':'🔄';
         const macDisplay=(h.mac&&h.mac!=='N/A')?h.mac:'🔁 مشترك';
         const hostnameDisplay=h.hostname?`<span style="color:rgba(255,255,255,0.5);font-size:.65rem;display:block">${h.hostname}</span>`:'';
         const ssidDisplay=h.ssid||scanSsid;
-        return `<tr><td>${i+1}</td><td dir="ltr">${h.ip}${hostnameDisplay}</td>
+        const hotspotBadge=h.isPotentialHotspotUser?'<span style="background:rgba(34,197,94,0.2);color:#22c55e;font-size:.6rem;padding:1px 6px;border-radius:4px;border:1px solid rgba(34,197,94,0.3)">🔥 جلسة محتملة</span>':'';
+        const sortKey=h.isPotentialHotspotUser?'0'+i:i;
+        return `<tr${h.isPotentialHotspotUser?' style="background:rgba(34,197,94,0.05)"':''} data-ispot="${h.isPotentialHotspotUser?'1':'0'}"><td>${i+1}</td><td dir="ltr">${h.ip}${hostnameDisplay}</td>
         <td dir="ltr" style="font-family:'Courier New',monospace;font-size:.7rem">${macDisplay}</td>
         <td style="font-size:.65rem;color:rgba(255,255,255,0.4);max-width:120px;overflow:hidden;text-overflow:ellipsis">${ssidDisplay}</td>
-        <td><span style="color:${vc};font-size:.75rem">${h.deviceType||h.vendor||'Unknown'}</span></td>
+        <td><span style="color:${vc};font-size:.75rem">${h.deviceType||h.vendor||'Unknown'}</span> ${hotspotBadge}</td>
         <td style="font-size:.65rem;color:rgba(255,255,255,0.4)">${h.source||'-'}</td>
         <td>${typeIcon}</td>
         <td style="display:flex;gap:3px;flex-wrap:wrap">
@@ -1011,7 +1020,7 @@ document.getElementById('hijackProgressModal').addEventListener('click', functio
 
 const strategyDescs = {
   'smart-auto': '🧠 يجرب API الراوتر أولاً، ثم انتظار الجلسة، ثم الكروت، وأخيراً التخمين',
-  'card-login': '💳 يستخدم الكروت المخزنة لتسجيل الدخول بعد انتحال MAC',
+  'card-login': '💳 الكروت المخزنة — الملاذ الأخير بعد فشل كل الطرق',
   'session-wait': '⏳ الطريقة الأصلية: انتحال MAC وانتظار تفعيل الجلسة',
   'api-session': '📡 يتصل بـ API الراوتر للبحث عن جلسة نشطة للهدف',
   'brute-force': '⚡ يجرب أرقام كروت عشوائية مع تدوير MAC عند الحظر',
@@ -1298,13 +1307,17 @@ async function loadMacDevices(){
     const netFilter=document.getElementById('macNetworkFilter');
 
     let totalDevices=0;
+    let hotspotTotal=0;
     const uniqueMacs=new Set();
 
     const netFilterVal=netFilter.value;
     const netOptions=[];
     networks.forEach(n=>{
       totalDevices+=n.devices.length;
-      n.devices.forEach(d=>{if(d.mac&&d.mac!=='N/A')uniqueMacs.add(d.mac)});
+      n.devices.forEach(d=>{
+        if(d.mac&&d.mac!=='N/A')uniqueMacs.add(d.mac);
+        if(d.isPotentialHotspotUser)hotspotTotal++;
+      });
       const name=n.ssid||n.gateway||'unknown';
       netOptions.push(name);
     });
@@ -1312,6 +1325,9 @@ async function loadMacDevices(){
     document.getElementById('macTotalNetworks').textContent=networks.length;
     document.getElementById('macTotalDevices').textContent=totalDevices;
     document.getElementById('macUniqueDevices').textContent=uniqueMacs.size;
+    const hotCountEl=document.getElementById('macHotspotCount');
+    const hotNumEl=document.getElementById('macHotspotCountNum');
+    if(hotspotTotal>0){hotCountEl.style.display='inline';hotNumEl.textContent=hotspotTotal}else{hotCountEl.style.display='none'}
 
     netFilter.innerHTML='<option value="">🌐 كل الشبكات</option>'+netOptions.map((n,i)=>`<option value="${i}"${n===netFilterVal?' selected':''}>${n}</option>`).join('');
 
@@ -1327,6 +1343,7 @@ async function loadMacDevices(){
     container.innerHTML=networks.map((n,nIdx)=>{
       if(netFilterVal!==''&&netFilterVal!==nIdx.toString())return '';
       let filtered=n.devices;
+      const hotspotOnly=document.getElementById('macHotspotFilter')?.classList.contains('active');
       if(filterVal){
         filtered=n.devices.filter(d=>
           (d.mac||'').toLowerCase().includes(filterVal)||
@@ -1335,6 +1352,7 @@ async function loadMacDevices(){
           (d.deviceType||'').toLowerCase().includes(filterVal)
         )
       }
+      if(hotspotOnly)filtered=filtered.filter(d=>d.isPotentialHotspotUser);
       if(!filtered.length)return '';
       const devsHtml=filtered.map(d=>{
         const vc=devColors[d.deviceType]||'#818cf8';
@@ -1352,6 +1370,7 @@ async function loadMacDevices(){
             <span class="md-ip">${d.ip}</span>
             ${hostDisplay}
             <span class="md-type" style="color:${vc}">${d.deviceType||'-'}</span>
+            ${d.isPotentialHotspotUser?'<span style="background:rgba(34,197,94,0.15);color:#22c55e;font-size:.55rem;padding:1px 5px;border-radius:3px;border:1px solid rgba(34,197,94,0.2)">🔥 جلسة</span>':''}
             ${d.isGateway?'<span style="color:#f59e0b;font-size:.65rem">🚪 بوابة</span>':''}
             ${lastSeenStr?`<span class="md-last-seen" title="آخر ظهور">🕐 ${lastSeenStr}</span>`:''}
             ${lastHijackStr?`<span class="md-hijack-date" title="آخر اختراق ناجح">🎯 ${lastHijackStr}</span>`:''}
@@ -1401,6 +1420,11 @@ document.getElementById('macNetworkFilter').addEventListener('change',loadMacDev
 document.getElementById('macSortBy').addEventListener('change',loadMacDevices);
 document.getElementById('macSortDir').addEventListener('change',loadMacDevices);
 document.getElementById('btnRefreshMacDevices').addEventListener('click',loadMacDevices);
+document.getElementById('macHotspotFilter').addEventListener('click',function(){
+  this.classList.toggle('active');
+  this.textContent=this.classList.contains('active')?'🔥 الجلسات فقط ON':'🔥 إظهار الجلسات فقط';
+  loadMacDevices();
+});
 document.getElementById('btnScan').addEventListener('click',()=>scanNetwork());
 document.getElementById('btnScanArp').addEventListener('click',()=>scanNetwork('arp'));
 

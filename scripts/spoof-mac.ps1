@@ -110,14 +110,14 @@ try {
     Set-ItemProperty -Path $targetKey -Name "NetworkAddress" -Value $cleanMac
 
     Disable-NetAdapter -Name $AdapterName -Confirm:$false *>&1 | Out-Null
-    Start-Sleep -Seconds 2
+    Start-Sleep -Milliseconds 500
     Enable-NetAdapter -Name $AdapterName -Confirm:$false *>&1 | Out-Null
 
-    $timeout = 15
+    $timeout = 10
     $elapsed = 0
     while ($elapsed -lt $timeout) {
-        Start-Sleep -Seconds 2
-        $elapsed += 2
+        Start-Sleep -Milliseconds 500
+        $elapsed += 0.5
         $check = Get-NetAdapter -Name $AdapterName -ErrorAction SilentlyContinue
         if ($check -and ($check.Status -eq 'Up' -or $check.Status -eq 'Disconnected')) {
             $result.newMac = $check.MacAddress
@@ -135,26 +135,13 @@ try {
     }
 
     if (-not $changed) {
-        try {
-            Set-NetAdapter -Name $AdapterName -MacAddress $cleanMac -NoRestart -Confirm:$false -ErrorAction Stop *>&1 | Out-Null
-            Restart-NetAdapter -Name $AdapterName -Confirm:$false -ErrorAction Stop *>&1 | Out-Null
-            Start-Sleep -Seconds 6
-            $check = Get-NetAdapter -Name $AdapterName -ErrorAction SilentlyContinue
-            if ($check -and $check.Status -eq 'Up' -and ($check.MacAddress -replace '-', '') -eq $cleanMac) {
-                $result.newMac = $check.MacAddress
-                $changed = $true
-            }
-        } catch {}
-    }
-
-    if (-not $changed) {
         throw "MAC address did not change"
     }
 
-    $reconnectTimeout = 15
+    $reconnectTimeout = 10
     while ($reconnectTimeout -gt 0) {
-        Start-Sleep -Seconds 2
-        $reconnectTimeout -= 2
+        Start-Sleep -Milliseconds 500
+        $reconnectTimeout -= 0.5
         try {
             $testIface = netsh wlan show interfaces 2>$null
             if ($testIface -match "SSID\s+:\s+.+") { break }

@@ -162,18 +162,18 @@ public class DeepScan {
         $result.hotspot.size = $hotspotHtml.Length
     } else { $result.hotspot.detected = $false }
 
-    $portProbePorts = @(80, 443, 8080, 8291, 22, 21, 23, 53, 2000, 3000, 5000, 7547, 9090)
+    $portProbePorts = @(80, 443, 8080, 53, 8291)
     $hostResults = @{}
     $uniqueMacSet = @{}
 
     # Process unique clients (real MACs) with full probing
     foreach ($kv in $uniqueClients.GetEnumerator()) {
         $ip = $kv.Key; $mac = $kv.Value
-        $ttl = if ($mac -ne "N/A") { [DeepScan]::GetTtl($ip, 80) } else { "?" }
+        $ttl = if ($mac -ne "N/A") { [DeepScan]::GetTtl($ip, 50) } else { "?" }
 
         $openPorts = @()
         foreach ($port in $portProbePorts) {
-            if ([DeepScan]::CheckPort($ip, $port, 40)) { $openPorts += $port }
+            if ([DeepScan]::CheckPort($ip, $port, 30)) { $openPorts += $port }
         }
 
         $deviceType = if ($ttl -eq '128') { 'Windows/ MikroTik' } elseif ($ttl -eq '64') { 'Linux/ macOS/ iOS/ Android' } elseif ($ttl -eq '255') { 'Cisco/ Unix' } elseif ($ttl -eq '?') { 'Unknown' } else { "TTL=$ttl" }
@@ -194,10 +194,10 @@ public class DeepScan {
     }
 
     # Add gateway with full probing
-    $gwTtl = [DeepScan]::GetTtl($gatewayIp, 80)
+    $gwTtl = [DeepScan]::GetTtl($gatewayIp, 50)
     $gwPorts = @()
     foreach ($port in $portProbePorts) {
-        if ([DeepScan]::CheckPort($gatewayIp, $port, 40)) { $gwPorts += $port }
+        if ([DeepScan]::CheckPort($gatewayIp, $port, 30)) { $gwPorts += $port }
     }
     $hostResults[$gatewayIp] = @{
         ip = $gatewayIp; mac = $gwMac; macUnique = $false

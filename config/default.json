@@ -35,9 +35,10 @@
   "hijack": {
     "defaultStrategy": "smart-auto",
     "blockedGatewayMac": "DC:2C:6E:31:06:A2",
-    "sessionWaitMaxSec": 20,
+    "sessionWaitMaxSec": 35,
     "cardLoginMaxCards": 10,
-    "bruteForceMaxTests": 50
+    "bruteForceMaxTests": 50,
+    "keepMacOnFailure": true
   },
   "rotation": {
     "enabled": true,
