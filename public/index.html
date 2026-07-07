@@ -464,6 +464,37 @@
     </div>
     <div id="hsConfigMsg" style="font-size:.7rem;color:rgba(255,255,255,0.3);margin-top:6px"></div>
   </div>
+
+  <div class="card" style="margin-top:12px">
+    <div class="ct">📡 إعدادات راوتر MikroTik</div>
+    <div style="font-size:.7rem;color:rgba(255,255,255,0.4);margin-bottom:8px">يُستخدم لمسح الشبكة عبر API الراوتر مباشرة (لحل مشكلة Proxy-ARP)</div>
+    <div style="display:grid;gap:10px;padding:4px 0">
+      <div class="fg"><label>IP الراوتر</label>
+        <input type="text" id="rtHost" placeholder="192.168.88.1" dir="ltr">
+      </div>
+      <div class="fg"><label>رقم المنفذ (Port)</label>
+        <input type="text" id="rtPort" value="443" dir="ltr">
+        <div style="font-size:.65rem;color:rgba(255,255,255,0.3);margin-top:2px">REST API port — 443 (HTTPS) أو 80 (HTTP)</div>
+      </div>
+      <div class="fg"><label>اسم المستخدم</label>
+        <input type="text" id="rtUser" value="admin" dir="ltr">
+      </div>
+      <div class="fg"><label>كلمة المرور</label>
+        <input type="password" id="rtPass" dir="ltr">
+      </div>
+      <div class="fg"><label>استخدام HTTPS</label>
+        <div style="display:flex;align-items:center;gap:6px;padding-top:2px">
+          <input type="checkbox" id="rtUseHttps" checked>
+          <label for="rtUseHttps" style="font-size:.75rem">استخدم HTTPS (مشفر) — أوقف التشغيل لاستخدام HTTP</label>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-s btn-sm" id="btnSaveRtConfig">💾 حفظ الإعدادات</button>
+      <button class="btn btn-p btn-sm" id="btnTestRtConfig">🔌 اختبار الاتصال</button>
+    </div>
+    <div id="rtConfigMsg" style="font-size:.7rem;color:rgba(255,255,255,0.3);margin-top:6px"></div>
+  </div>
 </div>
 
 </div>
@@ -1221,6 +1252,69 @@ async function saveHsConfig(){
 
 document.getElementById('btnLoadHsConfig').addEventListener('click',loadHsConfig);
 document.getElementById('btnSaveHsConfig').addEventListener('click',saveHsConfig);
+
+async function loadRtConfig(){
+  const msg=document.getElementById('rtConfigMsg');
+  try{
+    const r=await API.get('/api/network/router-api/config');
+    if(r.isSuccess&&r.value){
+      document.getElementById('rtHost').value=r.value.host||'';
+      document.getElementById('rtPort').value=r.value.port||'443';
+      document.getElementById('rtUser').value=r.value.username||'admin';
+      const pwEl=document.getElementById('rtPass');
+      if(r.value.password)pwEl.value=r.value.password;
+      else pwEl.value='';
+      if(r.value.useHttps!==undefined)document.getElementById('rtUseHttps').checked=r.value.useHttps;
+      msg.textContent='✅ تم تحميل الإعدادات';
+      setTimeout(()=>msg.textContent='',3000)
+    }
+  }catch(e){}
+}
+
+async function saveRtConfig(){
+  const btn=document.getElementById('btnSaveRtConfig');const msg=document.getElementById('rtConfigMsg');
+  const host=document.getElementById('rtHost').value.trim();
+  if(!host){msg.textContent='❌ أدخل IP الراوتر';return}
+  btn.disabled=true;msg.textContent='جارٍ الحفظ...';
+  try{
+    const r=await API.post('/api/network/router-api/configure',{
+      host,
+      port:parseInt(document.getElementById('rtPort').value.trim())||443,
+      username:document.getElementById('rtUser').value.trim()||'admin',
+      password:document.getElementById('rtPass').value,
+      useHttps:document.getElementById('rtUseHttps').checked,
+    });
+    if(r.isSuccess){msg.textContent='✅ تم حفظ إعدادات الراوتر';toast('تم حفظ إعدادات الراوتر','s')}
+    else{msg.textContent='❌ '+r.error;toast(r.error,'e')}
+  }catch(e){msg.textContent='❌ '+e.message;toast(e.message,'e')}
+  btn.disabled=false;setTimeout(()=>{if(msg.textContent!='❌ ...')msg.textContent=''},4000)
+}
+
+async function testRtConfig(){
+  const btn=document.getElementById('btnTestRtConfig');const msg=document.getElementById('rtConfigMsg');
+  btn.disabled=true;msg.textContent='جارٍ اختبار الاتصال...';
+  try{
+    const r=await API.get('/api/network/router-api/test');
+    if(r.isSuccess&&r.value){
+      const v=r.value;
+      if(v.success){
+        msg.textContent='✅ تم الاتصال بالراوتر — الجهاز: '+(v.identity||v.version||'')+' | إصدار: '+(v.version||'');
+        toast('✅ تم الاتصال بالراوتر','s')
+      }else{
+        msg.textContent='❌ فشل الاتصال: '+(v.error||'غير معروف');
+        toast('❌ فشل الاتصال','e')
+      }
+    }else{
+      msg.textContent='❌ '+(r.error||'فشل الاتصال');
+      toast(r.error||'فشل الاتصال','e')
+    }
+  }catch(e){msg.textContent='❌ '+e.message;toast(e.message,'e')}
+  btn.disabled=false;setTimeout(()=>{if(msg.textContent!='❌ ...')msg.textContent=''},5000)
+}
+
+document.getElementById('btnSaveRtConfig').addEventListener('click',saveRtConfig);
+document.getElementById('btnTestRtConfig').addEventListener('click',testRtConfig);
+loadRtConfig();
 
 document.getElementById('btnTestLogin').addEventListener('click',testLogin);
 document.getElementById('testUseCustomUrl').addEventListener('change',function(){

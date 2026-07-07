@@ -408,12 +408,15 @@ const networkScanner = {
     return { isSuccess: true, value: { ip: result.value.gateway, vendor: lookupVendor(result.value.gateway) }, error: null, statusCode: 200 };
   },
 
-  async configureRouterApi(host, username, password) {
-    mikrotikApi.setEnabled(host, username, password);
+  async configureRouterApi(host, username, password, port, useHttps) {
+    const useSsl = useHttps !== false;
+    mikrotikApi.setEnabled(host, username, password, port, useSsl);
     config.router = config.router || {};
     config.router.host = host;
     config.router.username = username || 'admin';
     config.router.password = password || '';
+    config.router.port = port || 443;
+    config.router.useSsl = useSsl;
     return { isSuccess: true, value: { configured: true, host }, error: null, statusCode: 200 };
   },
 };

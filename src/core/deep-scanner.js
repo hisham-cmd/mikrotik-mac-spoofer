@@ -321,7 +321,13 @@ const deepScanner = {
     if (arpFast.isSuccess) { gateway = arpFast.value.gateway; ourIp = arpFast.value.ourIp; ourMac = arpFast.value.ourMac; }
 
     let powerScanPromise = null;
-    if (gateway || ourIp) {
+    if (subnet) {
+      const [subNetAddr] = subnet.split('/');
+      const pfx = subNetAddr.split('.').slice(0, 3).join('.');
+      if (pfx.split('.').length === 3) {
+        powerScanPromise = this.runPowerfulScan(pfx, gateway, ourIp, ourMac);
+      }
+    } else if (gateway || ourIp) {
       const gwPrefix = gateway ? gateway.split('.').slice(0, 3).join('.') : null;
       const ourPrefix = ourIp ? ourIp.split('.').slice(0, 3).join('.') : null;
       const powerPrefix = (gwPrefix !== ourPrefix && gwPrefix) ? gwPrefix : (ourPrefix || gwPrefix);
@@ -371,6 +377,11 @@ const deepScanner = {
     const subnetsToScan = new Set();
     if (ourIp) subnetsToScan.add(ourIp.split('.').slice(0, 3).join('.'));
     if (gateway) subnetsToScan.add(gateway.split('.').slice(0, 3).join('.'));
+    if (subnet) {
+      const [subNetAddr] = subnet.split('/');
+      const pfx = subNetAddr.split('.').slice(0, 3).join('.');
+      if (pfx.split('.').length === 3) subnetsToScan.add(pfx);
+    }
     const prefixes = [...subnetsToScan];
 
     const pingSubnet = async (prefix) => {
@@ -535,13 +546,15 @@ const deepScanner = {
         const arpOut = await new Promise(r => execFile('arp', ['-a'], { timeout: 5000 }, (e, o) => r(e ? '' : (o || ''))));
         let resolved = 0;
         for (const line of arpOut.split('\n')) {
-          const m = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2})/);
+          const m = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2})/);
           if (!m) continue;
           const ip = m[1], mac = m[2].toUpperCase().replace(/-/g, ':');
           if (mac === '00:00:00:00:00:00' || mac.startsWith('01:00:5E') || mac === 'FF:FF:FF:FF:FF:FF') continue;
           const host = allHosts.find(h => h.ip === ip);
           if (host && (!host.hasUniqueMac || host.mac === 'N/A')) {
-            host.mac = mac; host.hasUniqueMac = true; host.vendor = lookupVendor(mac); host.source = 'arp-resolve'; resolved++;
+            const isRouterMac = mac === ourMac || mac === 'D4:01:C3:87:AC:69';
+            host.mac = mac; host.vendor = lookupVendor(mac); host.source = 'arp-resolve';
+            if (!isRouterMac) { host.hasUniqueMac = true; resolved++; }
           }
         }
         logger.info(`[SCAN] ✅ ARP MAC Resolution: +${resolved} MAC (إجمالي ${allHosts.filter(h => h.hasUniqueMac).length})`);
@@ -581,10 +594,10 @@ const deepScanner = {
     }
 
     const beforeFilter = allHosts.length;
-    const filteredHosts = allHosts.filter(h => h.isGateway || h.hasUniqueMac);
+    const filteredHosts = allHosts.filter(h => h.isGateway || h.hasUniqueMac || h.portCount > 0);
 
     const filteredCount = beforeFilter - filteredHosts.length;
-    if (filteredCount > 0) logger.info(`[SCAN] تم تصفية ${filteredCount} جهاز بدون MAC`);
+    if (filteredCount > 0) logger.info(`[SCAN] تم تصفية ${filteredCount} جهاز (بدون MAC ولا بورت)`, filteredCount);
 
     filteredHosts.sort((a, b) => {
       if (a.isGateway) return -1;
@@ -644,23 +657,14 @@ const deepScanner = {
         } catch (e) {}
       }
 
-      if (gateway || ourIp) {
-        const prefix = (gateway || ourIp).split('.').slice(0, 3).join('.');
-        try {
-          await Promise.race([
-            new Promise(r => execFile('powershell.exe', ['-NoProfile', '-Command',
-              `$b="${prefix}.";$ts=@();1..254|%{$c=New-Object Net.Sockets.TcpClient;$ts+=$c.ConnectAsync($b+$_,80);Start-Sleep -m 1};Start-Sleep 2;$ts|%{try{$_.Dispose()}catch{}}`
-            ], { timeout: 15000 }, () => r())),
-            new Promise(r => setTimeout(r, 12000)),
-          ]);
-        } catch (e) {}
-      }
+      // TCP sweep skipped: causes hang on Proxy-ARP networks (router responds for all IPs).
+      // ARP cache read below provides existing entries without active scanning.
 
       const arpMap = await new Promise(r => execFile('arp', ['-a'], { timeout: 5000 }, (err, out) => {
         if (err) { r(new Map()); return; }
         const seen = new Set(), map = new Map();
         for (const line of ((out || '').split('\n'))) {
-          const m = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2}[-:][0-9A-F]{2})/);
+          const m = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2})/);
           if (m && !seen.has(m[1])) { seen.add(m[1]); map.set(m[1], m[2].toUpperCase().replace(/-/g, ':')); }
         } r(map);
       }));

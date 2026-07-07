@@ -57,9 +57,9 @@ function writeLog(level, message, data) {
     console.error(`Log write failed: ${err.message}`);
   }
   if (level === 'error') {
-    console.error(line.trim());
+    try { console.error(line.trim()); } catch (e) {}
   } else {
-    console.log(line.trim());
+    try { console.log(line.trim()); } catch (e) {}
   }
 }
 

@@ -17,10 +17,12 @@ class MikrotikApi {
     return this._enabled;
   }
 
-  setEnabled(host, username, password) {
+  setEnabled(host, username, password, port, useSsl) {
     this.host = host;
     this.username = username || 'admin';
     this.password = password || '';
+    if (port) this.port = port;
+    if (useSsl !== undefined) this.useSsl = useSsl;
     this._enabled = !!host;
   }
 

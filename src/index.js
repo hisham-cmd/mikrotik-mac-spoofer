@@ -1,6 +1,6 @@
 const express = require('express');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, exec } = require('child_process');
 const logger = require('./utils/logger');
 const wifiManager = require('./core/wifi-manager');
 const hotspotAuth = require('./core/hotspot-auth');
@@ -342,14 +342,94 @@ app.get('/api/network/arp-only', async (req, res) => {
   }
 });
 
+app.get('/api/network/arp-simple', async (req, res) => {
+  logger.info(`[REQ] ${req.method} /api/network/arp-simple`);
+  try {
+    const hosts = [], seen = new Set();
+    const stdout = await new Promise((resolve, reject) => {
+      exec('arp -a', { timeout: 7000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        if (err && !stdout) { reject(err); return; }
+        resolve(stdout || '');
+      });
+    });
+    for (const line of stdout.split('\n')) {
+      const m = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2})/);
+      if (m && !seen.has(m[1])) {
+        seen.add(m[1]);
+        const ip = m[1], mac = m[2].toUpperCase().replace(/-/g, ':');
+        if (mac !== '00:00:00:00:00:00' && !mac.startsWith('01:00:5E') && mac !== 'FF:FF:FF:FF:FF:FF') {
+          hosts.push({ ip, mac });
+        }
+      }
+    }
+    hosts.sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
+    res.json({ isSuccess: true, value: { hosts, totalFound: hosts.length, source: 'arp-simple' }, error: null, statusCode: 200 });
+  } catch (err) {
+    logger.error(`[REQ] ❌ arp-simple خطأ: ${err.message}`);
+    apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 });
+  }
+});
+
+app.get('/api/network/arp-ping', async (req, res) => {
+  logger.info(`[REQ] ${req.method} /api/network/arp-ping`);
+  try {
+    const ips = [];
+    for (let octet of ['0', '1', '3']) {
+      for (let i = 1; i <= 254; i++) ips.push(`172.0.${octet}.${i}`);
+    }
+    const pingBatch = (list) => Promise.all(list.map(ip => new Promise(r => {
+      execFile('ping', ['-n', '1', '-w', '50', ip], { timeout: 300 }, () => r(ip));
+    })));
+    const batchResults = [];
+    for (let i = 0; i < ips.length; i += 100) {
+      batchResults.push(...await pingBatch(ips.slice(i, i + 100)));
+    }
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const stdout = await new Promise((resolve, reject) => {
+      exec('arp -a', { timeout: 7000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        if (err && !stdout) { reject(err); return; }
+        resolve(stdout || '');
+      });
+    });
+    const arpMap = {};
+    for (const line of stdout.split('\n')) {
+      const m = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2})/);
+      if (m) arpMap[m[1]] = m[2].toUpperCase().replace(/-/g, ':');
+    }
+    const routerMac = arpMap['172.0.0.1'] || '';
+    const hosts = batchResults.filter(ip => {
+      const mac = arpMap[ip] || '';
+      return mac && mac !== '00:00:00:00:00:00' && !mac.startsWith('01:00:5E') && mac !== 'FF:FF:FF:FF:FF:FF';
+    }).map(ip => ({
+      ip, mac: arpMap[ip] || '',
+      isConfirmed: arpMap[ip] && arpMap[ip] !== routerMac,
+    }));
+    hosts.sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
+    res.json({ isSuccess: true, value: { hosts, totalFound: hosts.length, source: 'arp-ping' }, error: null, statusCode: 200 });
+  } catch (err) {
+    logger.error(`[REQ] ❌ arp-ping خطأ: ${err.message}`);
+    apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 });
+  }
+});
+
 app.post('/api/network/router-api/configure', async (req, res) => {
-  const { host, username, password } = req.body;
+  const { host, username, password, port, useHttps } = req.body;
   if (!host) {
     apiResponse(res, { isSuccess: false, value: null, error: 'Router host IP required', statusCode: 400 });
     return;
   }
-  const result = await networkScanner.configureRouterApi(host, username, password);
+  const result = await networkScanner.configureRouterApi(host, username, password, port, useHttps);
   apiResponse(res, result);
+});
+
+app.get('/api/network/router-api/config', async (req, res) => {
+  const cfg = config.router || {};
+  apiResponse(res, {
+    isSuccess: true,
+    value: { host: cfg.host || '', port: cfg.port || 443, username: cfg.username || 'admin', useHttps: cfg.useSsl !== false },
+    error: null,
+    statusCode: 200,
+  });
 });
 
 app.get('/api/network/router-api/test', async (req, res) => {
@@ -364,12 +444,19 @@ app.get('/api/network/router-api/test', async (req, res) => {
     const hotspot = await api.getActiveHotspotSessions();
     apiResponse(res, {
       isSuccess: true,
-      value: { leases, arp, hotspot, leaseCount: leases.length, arpCount: arp.length, hotspotCount: hotspot.length },
+      value: {
+        success: true,
+        identity: api.host || '',
+        version: leases.length > 0 ? 'DHCP: ' + leases.length + ' leases' : 'connected',
+        leaseCount: leases.length,
+        arpCount: arp.length,
+        hotspotCount: hotspot.length,
+      },
       error: null,
       statusCode: 200,
     });
   } catch (err) {
-    apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 });
+    apiResponse(res, { isSuccess: false, value: { success: false, error: err.message }, error: null, statusCode: 200 });
   }
 });
 
