@@ -238,6 +238,7 @@
         <span id="scanStat" style="font-size:.7rem;color:rgba(255,255,255,0.35)"></span>
         <button class="btn btn-d btn-sm" id="btnScanArp">📡 ARP فقط</button>
         <button class="btn btn-p btn-sm" id="btnScan">🔍 فحص عميق</button>
+        <button class="btn btn-danger btn-sm" id="btnProbe" style="background:linear-gradient(135deg,#dc2626,#b91c1c);border:none;color:#fff;padding:4px 10px;border-radius:8px;cursor:pointer;font-size:.78rem">🎯 مسح يقيني</button>
       </div>
     </div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;font-size:.78rem;color:rgba(255,255,255,0.45)">
@@ -681,17 +682,22 @@ async function loadLog(){
 let scanData=null;
 
 async function scanNetwork(mode){
-  const btn=mode==='arp'?document.getElementById('btnScanArp'):document.getElementById('btnScan');
-  const otherBtn=mode==='arp'?document.getElementById('btnScan'):document.getElementById('btnScanArp');
+  const btnProbe=document.getElementById('btnProbe');
+  const btn=mode==='arp'?document.getElementById('btnScanArp'):(mode==='probe'?btnProbe:document.getElementById('btnScan'));
+  const btns=[document.getElementById('btnScan'),document.getElementById('btnScanArp'),btnProbe];
   const st=document.getElementById('scanStat');
   const stepsEl=document.getElementById('scanSteps');
-  btn.disabled=true;otherBtn.disabled=true;
-  const isDeep = mode !== 'arp';
-  st.textContent = isDeep ? 'جارٍ المسح العميق...' : 'جارٍ مسح ARP...';
-  const scanTimeout = setTimeout(() => { st.textContent = '⏱ تجاوز الوقت!'; stepsEl.style.display = 'none'; btn.disabled = false; otherBtn.disabled = false; }, isDeep ? 300000 : 20000);
-  const scanStageLabels = isDeep
-    ? [['📡','ARP Cache','قراءة ARP...'],['🔍','API','API الراوتر...'],['🌐','تحليل','تحليل النتائج...']]
-    : [['📡','ARP Cache','قراءة ARP...'],['🔍','تحليل','تحليل...']];
+  btns.forEach(b=>{if(b)b.disabled=true});
+  const isProbe = mode === 'probe';
+  const isDeep = mode !== 'arp' && !isProbe;
+  st.textContent = isProbe ? 'جارٍ المسح اليقيني...' : (isDeep ? 'جارٍ المسح العميق...' : 'جارٍ مسح ARP...');
+  const to = isProbe ? 300000 : (isDeep ? 300000 : 20000);
+  const scanTimeout = setTimeout(() => { st.textContent = '⏱ تجاوز الوقت!'; stepsEl.style.display = 'none'; btns.forEach(b=>{if(b)b.disabled=false}); }, to);
+  const scanStageLabels = isProbe
+    ? [['🔌','TCP Probe','فحص المنافذ...'],['📡','ARP','قراءة ARP...'],['🌐','تحليل','تحليل النتائج...']]
+    : (isDeep
+      ? [['📡','ARP Cache','قراءة ARP...'],['🔍','API','API الراوتر...'],['🌐','تحليل','تحليل النتائج...']]
+      : [['📡','ARP Cache','قراءة ARP...'],['🔍','تحليل','تحليل...']]);
   stepsEl.style.display='flex';
   stepsEl.innerHTML=scanStageLabels.map((s,i)=>`<span class="step run" id="ss${i}"><span class="sicon">${s[0]}</span> ${s[1]}</span>`).join('');
   let si=0;
@@ -708,7 +714,7 @@ async function scanNetwork(mode){
   },800);
 
   try{
-    const url = isDeep ? '/api/network/deep-enhanced' : '/api/network/arp-only';
+    const url = isProbe ? '/api/network/probe-real' : (isDeep ? '/api/network/deep-enhanced' : '/api/network/arp-only');
     const r=await API.get(url+'?timeout=50');
     clearTimeout(scanTimeout);
     clearInterval(anim);
@@ -725,7 +731,7 @@ async function scanNetwork(mode){
     const potentialCount=d.potentialUserCount||0;
     const sCountEl=document.getElementById('sCount');
     if(potentialCount>0){sCountEl.textContent=d.totalFound+' 🔥'+potentialCount}else{sCountEl.textContent=d.totalFound||0}
-    document.getElementById('sSource').textContent=d.source||'-';
+    if(d.source==='real-probe'&&d.confirmedCount!==undefined){document.getElementById('sSource').textContent='🎯 مسح يقيني ('+d.confirmedCount+' مؤكد)'}else{document.getElementById('sSource').textContent=d.source||'-'}
     const proxyInfo=document.getElementById('sProxyInfo');
     if(proxyInfo){
       const totalProxy=d.totalProxyIps||0;
@@ -734,7 +740,7 @@ async function scanNetwork(mode){
     }
     const hosts=d.hosts||[];const tb=document.getElementById('scanTBody');
 
-    const typeLabels={'router-query':'📡 من الراوتر','fallback':'🔍 مسح احتياطي','deep-scan':'🔍 فحص عميق','arp-only':'📡 ARP','unknown':'غير معروف'};
+    const typeLabels={'router-query':'📡 من الراوتر','fallback':'🔍 مسح احتياطي','deep-scan':'🔍 فحص عميق','arp-only':'📡 ARP','real-probe':'🎯 مسح يقيني','unknown':'غير معروف'};
     st.textContent='المصدر: '+(typeLabels[d.source]||d.source)+(d.apiAvailable?' (API الراوتر متصل)':'')+(d.apiError?' (API الراوتر: '+d.apiError+')':'');
 
     const scanSsid=d.ssid||'-';
@@ -744,20 +750,21 @@ async function scanNetwork(mode){
         const devColors={'MikroTik':'#f59e0b','Windows Device':'#3b82f6','Linux/Mac Device':'#22c55e','Web Server':'#a78bfa','Client Device':'rgba(255,255,255,0.5)','Unknown':'rgba(255,255,255,0.35)','Named Device':'#a78bfa'};
         for(const k in devColors){if((h.deviceType||'').startsWith(k)){devColors[k]=devColors[k];break}}
         const vc=devColors[h.deviceType]||'#818cf8';
-        const typeIcon=h.isGateway?'🚪':h.hasUniqueMac?'📱':'🔄';
+        const typeIcon=h.isGateway?'🚪':(h.isConfirmed?'✅':h.hasUniqueMac?'📱':'🔄');
         const macDisplay=(h.mac&&h.mac!=='N/A')?h.mac:'🔁 مشترك';
         const hostnameDisplay=h.hostname?`<span style="color:rgba(255,255,255,0.5);font-size:.65rem;display:block">${h.hostname}</span>`:'';
         const ssidDisplay=h.ssid||scanSsid;
         const hotspotBadge=h.isPotentialHotspotUser?'<span style="background:rgba(34,197,94,0.2);color:#22c55e;font-size:.6rem;padding:1px 6px;border-radius:4px;border:1px solid rgba(34,197,94,0.3)">🔥 جلسة محتملة</span>':'';
         const sortKey=h.isPotentialHotspotUser?'0'+i:i;
-        return `<tr${h.isPotentialHotspotUser?' style="background:rgba(34,197,94,0.05)"':''} data-ispot="${h.isPotentialHotspotUser?'1':'0'}"><td>${i+1}</td><td dir="ltr">${h.ip}${hostnameDisplay}</td>
+        const portsInfo=h.portCount>0?`<span style="color:#22c55e;font-size:.6rem;display:block">منافذ مفتوحة: ${h.openPorts||''}</span>`:'';
+        return `<tr${h.isPotentialHotspotUser?' style="background:rgba(34,197,94,0.05)"':''} data-ispot="${h.isPotentialHotspotUser?'1':'0'}"><td>${i+1}</td><td dir="ltr">${h.ip}${hostnameDisplay}${portsInfo}</td>
         <td dir="ltr" style="font-family:'Courier New',monospace;font-size:.7rem">${macDisplay}</td>
         <td style="font-size:.65rem;color:rgba(255,255,255,0.4);max-width:120px;overflow:hidden;text-overflow:ellipsis">${ssidDisplay}</td>
-        <td><span style="color:${vc};font-size:.75rem">${h.deviceType||h.vendor||'Unknown'}</span> ${hotspotBadge}</td>
+        <td><span style="color:${vc};font-size:.75rem">${h.deviceType||h.vendor||'Unknown'}</span> ${hotspotBadge}${h.isConfirmed?'<span style="background:rgba(34,197,94,0.2);color:#22c55e;font-size:.6rem;padding:1px 5px;border-radius:4px;margin-right:3px">✔ مؤكد</span>':''}</td>
         <td style="font-size:.65rem;color:rgba(255,255,255,0.4)">${h.source||'-'}</td>
         <td>${typeIcon}</td>
         <td style="display:flex;gap:3px;flex-wrap:wrap">
-          ${h.isGateway?'<span style="color:rgba(255,255,255,0.3);font-size:.7rem;padding:4px 8px">🚪 البوابة</span>':h.hasUniqueMac?`<button class="btn btn-s btn-sm" onclick='hijackTarget(${JSON.stringify({ip:h.ip,mac:h.mac,vendor:h.deviceType||h.vendor}).replace(/'/g,"\\'")})'>🎯 اختراق</button>`:'<span style="color:rgba(255,255,255,0.15);font-size:.65rem">⚙️ proxy</span>'}
+          ${h.isGateway?'<span style="color:rgba(255,255,255,0.3);font-size:.7rem;padding:4px 8px">🚪 البوابة</span>':(h.hasUniqueMac||h.isConfirmed)&&h.mac&&h.mac!=='N/A'?`<button class="btn btn-s btn-sm" onclick='hijackTarget(${JSON.stringify({ip:h.ip,mac:h.mac,vendor:h.deviceType||h.vendor}).replace(/'/g,"\\'")})'>🎯 اختراق</button>`:'<span style="color:rgba(255,255,255,0.15);font-size:.65rem">⚙️ proxy</span>'}
           ${h.isGateway?'':`<button class="btn btn-d btn-sm" onclick='disconnectTarget(${JSON.stringify({ip:h.ip,mac:h.mac}).replace(/'/g,"\\'")})'>🔌 فصل</button>`}
         </td></tr>`
       }).join('')
@@ -765,7 +772,7 @@ async function scanNetwork(mode){
     loadScanHistory();
     st.textContent+=' — '+new Date().toLocaleTimeString('ar-SA')
   }catch(e){toast(e.message,'e');st.textContent='خطأ';stepsEl.style.display='none';clearInterval(anim)}
-  btn.disabled=false;otherBtn.disabled=false
+  btns.forEach(b=>{if(b)b.disabled=false})
 }
 
 async function scanDeep(){scanNetwork()}
@@ -1520,6 +1527,7 @@ document.getElementById('macHotspotFilter').addEventListener('click',function(){
 });
 document.getElementById('btnScan').addEventListener('click',()=>scanNetwork());
 document.getElementById('btnScanArp').addEventListener('click',()=>scanNetwork('arp'));
+document.getElementById('btnProbe').addEventListener('click',()=>scanNetwork('probe'));
 
 loadStatus();loadCards();loadLog();loadHijackState();loadBrute();loadScanHistory();updateCurrentMac();loadHsConfig();loadMacDevices();
 setInterval(loadStatus,5000);setInterval(loadCards,15000);setInterval(loadLog,10000);setInterval(loadHijackState,3000);setInterval(loadBrute,2000);setInterval(loadScanHistory,15000);setInterval(loadMacDevices,15000)

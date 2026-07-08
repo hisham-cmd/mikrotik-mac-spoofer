@@ -329,6 +329,23 @@ app.get('/api/network/deep-enhanced', async (req, res) => {
   }
 });
 
+app.get('/api/network/probe-real', async (req, res) => {
+  let done = false;
+  logger.info(`[REQ] ${req.method} /api/network/probe-real`);
+  const timer = setTimeout(() => {
+    if (!done) { done = true; logger.error(`[REQ] ❌ probe-real انتهت المهلة (300s)`); apiResponse(res, { isSuccess: false, value: null, error: 'انتهت مهلة المسح اليقيني', statusCode: 504 }); }
+  }, 300000);
+  try {
+    const subnet = req.query.subnet || null;
+    const result = await deepScanner.probeRealDevices(subnet);
+    clearTimeout(timer);
+    if (!done) { done = true; logger.info(`[REQ] ✅ probe-real: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0}`); scanHistoryStore.recordScan(result); apiResponse(res, result); }
+  } catch (err) {
+    clearTimeout(timer);
+    if (!done) { done = true; logger.error(`[REQ] ❌ probe-real خطأ: ${err.message}`); apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 }); }
+  }
+});
+
 app.get('/api/network/arp-only', async (req, res) => {
   logger.info(`[REQ] ${req.method} /api/network/arp-only`);
   try {

@@ -382,6 +382,9 @@ const deepScanner = {
       const pfx = subNetAddr.split('.').slice(0, 3).join('.');
       if (pfx.split('.').length === 3) subnetsToScan.add(pfx);
     }
+    for (const h of allHosts) {
+      if (h.subnet && !h.isGateway) subnetsToScan.add(h.subnet);
+    }
     const prefixes = [...subnetsToScan];
 
     const pingSubnet = async (prefix) => {
@@ -793,6 +796,162 @@ const deepScanner = {
     } catch (err) {
       return { isSuccess: false, value: null, error: err.message, statusCode: 500 };
     }
+  },
+
+  async probeRealDevices(subnet) {
+    const start = Date.now();
+    logger.info(`[PROBE] بدء المسح اليقيني للأجهزة الحقيقية: subnet=${subnet || 'auto'}`);
+
+    let ourIp = null, gateway = null, arpRet = null;
+    try {
+      arpRet = await this.arpOnly();
+      if (arpRet.isSuccess) {
+        gateway = arpRet.value.gateway;
+        ourIp = arpRet.value.ourIp;
+      }
+    } catch (e) {}
+
+    if (!subnet && gateway) {
+      const parts = gateway.split('.');
+      subnet = `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+    }
+
+    const prefixesToScan = new Set();
+    if (gateway) prefixesToScan.add(gateway.split('.').slice(0, 3).join('.'));
+    if (ourIp) prefixesToScan.add(ourIp.split('.').slice(0, 3).join('.'));
+    if (subnet) {
+      const [subNetAddr] = subnet.split('/');
+      const pfx = subNetAddr.split('.').slice(0, 3).join('.');
+      if (pfx.split('.').length === 3) prefixesToScan.add(pfx);
+    }
+    if (arpRet && arpRet.isSuccess && arpRet.value.hosts) {
+      for (const h of arpRet.value.hosts) {
+        if (h.subnet && !h.isGateway) prefixesToScan.add(h.subnet);
+      }
+    }
+    const prefixes = [...prefixesToScan];
+    if (prefixes.length === 0) {
+      return { isSuccess: false, value: null, error: 'لا توجد شبكات لفحصها', statusCode: 400 };
+    }
+
+    const gwMac = gateway && arpRet && arpRet.value.hosts
+      ? (arpRet.value.hosts.find(h => h.ip === gateway) || {}).mac : null;
+    const arpHosts = (arpRet && arpRet.isSuccess && arpRet.value.hosts) ? arpRet.value.hosts : [];
+    const uniqueArpHosts = arpHosts.filter(h => !h.isGateway && h.hasUniqueMac && h.mac !== gwMac);
+
+    const PROBE_PORTS = [22, 80, 443, 8080, 8443, 3000, 5000, 9090];
+
+    const probeIP = (ip) => new Promise(res => {
+      let done = false;
+      const openPorts = [];
+      let remaining = PROBE_PORTS.length;
+      const checkDone = () => { if (--remaining <= 0 && !done) { done = true; res(openPorts.length > 0 ? { ip, openPorts: openPorts.join(','), portCount: openPorts.length } : null); } };
+      for (const port of PROBE_PORTS) {
+        const sock = new net.Socket();
+        sock.setTimeout(200);
+        let portDone = false;
+        sock.on('connect', () => { sock.destroy(); if (!portDone) { portDone = true; openPorts.push(port); checkDone(); } });
+        sock.on('error', () => { sock.destroy(); if (!portDone) { portDone = true; checkDone(); } });
+        sock.on('timeout', () => { sock.destroy(); if (!portDone) { portDone = true; checkDone(); } });
+        sock.connect(port, ip);
+      }
+    });
+
+    const pingIP = (ip) => new Promise(r => {
+      execFile('ping', ['-n', '1', '-w', '200', ip], { timeout: 1500 }, e => r(!e));
+    });
+
+    const confirmedSet = new Set();
+    const allDevices = [];
+
+    for (const h of uniqueArpHosts) {
+      allDevices.push({
+        ip: h.ip, mac: h.mac, openPorts: '', portCount: 0,
+        deviceType: h.deviceType, vendor: h.vendor,
+        isGateway: false, subnet: h.subnet, hasUniqueMac: true,
+        source: 'arp-cache',
+        confirmation: ['arp-unique-mac'],
+      });
+      confirmedSet.add(h.ip);
+    }
+
+    logger.info(`[PROBE] مسح ${prefixes.length} شبكة TCP: ${prefixes.join(', ')}`);
+    for (const prefix of prefixes) {
+      const ipList = Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
+      for (let b = 0; b < ipList.length; b += 25) {
+        const batch = ipList.slice(b, b + 25);
+        const results = await Promise.all(batch.map(ip => probeIP(ip)));
+        for (const r of results) {
+          if (r && !confirmedSet.has(r.ip)) {
+            r.mac = 'N/A'; r.deviceType = 'Web Server'; r.vendor = 'Unknown';
+            r.isGateway = false; r.subnet = prefix;
+            r.source = 'tcp-probe';
+            r.confirmation = ['tcp-connect'];
+            allDevices.push(r);
+            confirmedSet.add(r.ip);
+          }
+        }
+      }
+    }
+
+    logger.info(`[PROBE] ICMP Ping Sweep لـ ${prefixes.length} شبكة...`);
+    for (const prefix of prefixes) {
+      const ipList = Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
+      for (let b = 0; b < ipList.length; b += 30) {
+        const batch = ipList.slice(b, b + 30);
+        const results = await Promise.all(batch.map(ip => pingIP(ip)));
+        for (let j = 0; j < results.length; j++) {
+          if (results[j]) {
+            const ip = batch[j];
+            if (!confirmedSet.has(ip)) {
+              allDevices.push({
+                ip, mac: 'N/A', openPorts: '', portCount: 0,
+                deviceType: 'Client Device', vendor: 'Unknown',
+                isGateway: false, subnet: prefix,
+                source: 'icmp-sweep',
+                confirmation: ['icmp-reply'],
+              });
+              confirmedSet.add(ip);
+            } else {
+              const ex = allDevices.find(d => d.ip === ip);
+              if (ex) ex.confirmation.push('icmp-reply');
+            }
+          }
+        }
+      }
+    }
+
+    for (const d of allDevices) {
+      d.isConfirmed = d.confirmation.includes('tcp-connect') || d.confirmation.includes('arp-unique-mac');
+      d.confirmMethod = d.confirmation.join('+');
+    }
+
+    allDevices.sort((a, b) => {
+      const order = { 'tcp-connect': 0, 'arp-unique-mac': 1, 'icmp-reply': 2 };
+      const aa = order[a.confirmation[0]] || 9;
+      const bb = order[b.confirmation[0]] || 9;
+      return aa - bb;
+    });
+
+    const duration = Date.now() - start;
+    const confirmedCount = allDevices.filter(d => d.isConfirmed).length;
+    logger.info(`[PROBE] ✅ المسح اليقيني: ${allDevices.length} جهاز (${confirmedCount} مؤكد) في ${duration}ms`);
+
+    return {
+      isSuccess: true,
+      value: {
+        hosts: allDevices,
+        gateway, ourIp,
+        totalFound: allDevices.length,
+        confirmedCount,
+        source: 'real-probe',
+        _scanDuration: duration,
+        _scanStart: new Date(start).toLocaleTimeString('ar-SA'),
+        _scanEnd: new Date().toLocaleTimeString('ar-SA'),
+      },
+      error: null,
+      statusCode: 200,
+    };
   },
 
   getMikrotikApi() {
