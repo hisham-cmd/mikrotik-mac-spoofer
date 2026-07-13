@@ -839,16 +839,20 @@ const deepScanner = {
     const arpHosts = (arpRet && arpRet.isSuccess && arpRet.value.hosts) ? arpRet.value.hosts : [];
     const uniqueArpHosts = arpHosts.filter(h => !h.isGateway && h.hasUniqueMac && h.mac !== gwMac);
 
-    const PROBE_PORTS = [22, 80, 443, 8080, 8443, 3000, 5000, 9090];
+    const gwPrefix = gateway ? gateway.split('.').slice(0, 3).join('.') : null;
+    const PROBE_PORTS_LAN = [21, 22, 23, 53, 80, 135, 139, 443, 445, 8080, 8443, 3389, 5900, 9090, 10000, 3000, 5000];
+    const PROBE_PORTS_OTHER = [22, 80, 443, 8080, 8443, 3000, 5000, 9090];
 
-    const probeIP = (ip) => new Promise(res => {
+    const probeIP = (ip, isLan = false) => new Promise(res => {
       let done = false;
       const openPorts = [];
-      let remaining = PROBE_PORTS.length;
+      const ports = isLan ? PROBE_PORTS_LAN : PROBE_PORTS_OTHER;
+      const timeout = isLan ? 100 : 200;
+      let remaining = ports.length;
       const checkDone = () => { if (--remaining <= 0 && !done) { done = true; res(openPorts.length > 0 ? { ip, openPorts: openPorts.join(','), portCount: openPorts.length } : null); } };
-      for (const port of PROBE_PORTS) {
+      for (const port of ports) {
         const sock = new net.Socket();
-        sock.setTimeout(200);
+        sock.setTimeout(timeout);
         let portDone = false;
         sock.on('connect', () => { sock.destroy(); if (!portDone) { portDone = true; openPorts.push(port); checkDone(); } });
         sock.on('error', () => { sock.destroy(); if (!portDone) { portDone = true; checkDone(); } });
@@ -857,36 +861,39 @@ const deepScanner = {
       }
     });
 
-    const pingIP = (ip) => new Promise(r => {
-      execFile('ping', ['-n', '1', '-w', '200', ip], { timeout: 1500 }, e => r(!e));
-    });
-
     const confirmedSet = new Set();
     const allDevices = [];
 
     for (const h of uniqueArpHosts) {
+      const devPrefix = h.subnet || (h.ip ? h.ip.split('.').slice(0, 3).join('.') : null);
       allDevices.push({
         ip: h.ip, mac: h.mac, openPorts: '', portCount: 0,
         deviceType: h.deviceType, vendor: h.vendor,
-        isGateway: false, subnet: h.subnet, hasUniqueMac: true,
+        isGateway: false, subnet: devPrefix, hasUniqueMac: true,
         source: 'arp-cache',
         confirmation: ['arp-unique-mac'],
+        networkTag: devPrefix ? `${devPrefix}.x` : 'Unknown',
+        isSameSubnetAsGateway: !!(devPrefix && gwPrefix && devPrefix === gwPrefix),
       });
       confirmedSet.add(h.ip);
     }
 
     logger.info(`[PROBE] مسح ${prefixes.length} شبكة TCP: ${prefixes.join(', ')}`);
     for (const prefix of prefixes) {
+      const isLan = !!(gwPrefix && prefix === gwPrefix);
+      const batchSize = isLan ? 20 : 25;
       const ipList = Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
-      for (let b = 0; b < ipList.length; b += 25) {
-        const batch = ipList.slice(b, b + 25);
-        const results = await Promise.all(batch.map(ip => probeIP(ip)));
+      for (let b = 0; b < ipList.length; b += batchSize) {
+        const batch = ipList.slice(b, b + batchSize);
+        const results = await Promise.all(batch.map(ip => probeIP(ip, isLan)));
         for (const r of results) {
           if (r && !confirmedSet.has(r.ip)) {
             r.mac = 'N/A'; r.deviceType = 'Web Server'; r.vendor = 'Unknown';
             r.isGateway = false; r.subnet = prefix;
             r.source = 'tcp-probe';
             r.confirmation = ['tcp-connect'];
+            r.networkTag = `${prefix}.x`;
+            r.isSameSubnetAsGateway = isLan;
             allDevices.push(r);
             confirmedSet.add(r.ip);
           }
@@ -896,10 +903,16 @@ const deepScanner = {
 
     logger.info(`[PROBE] ICMP Ping Sweep لـ ${prefixes.length} شبكة...`);
     for (const prefix of prefixes) {
+      const isLan = !!(gwPrefix && prefix === gwPrefix);
+      const pingTimeout = isLan ? '100' : '200';
+      const batchSize = isLan ? 40 : 30;
+      const pingIPfast = (ip) => new Promise(r => {
+        execFile('ping', ['-n', '1', '-w', pingTimeout, ip], { timeout: isLan ? 800 : 1500 }, e => r(!e));
+      });
       const ipList = Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
-      for (let b = 0; b < ipList.length; b += 30) {
-        const batch = ipList.slice(b, b + 30);
-        const results = await Promise.all(batch.map(ip => pingIP(ip)));
+      for (let b = 0; b < ipList.length; b += batchSize) {
+        const batch = ipList.slice(b, b + batchSize);
+        const results = await Promise.all(batch.map(ip => pingIPfast(ip)));
         for (let j = 0; j < results.length; j++) {
           if (results[j]) {
             const ip = batch[j];
@@ -910,11 +923,17 @@ const deepScanner = {
                 isGateway: false, subnet: prefix,
                 source: 'icmp-sweep',
                 confirmation: ['icmp-reply'],
+                networkTag: `${prefix}.x`,
+                isSameSubnetAsGateway: isLan,
               });
               confirmedSet.add(ip);
             } else {
               const ex = allDevices.find(d => d.ip === ip);
-              if (ex) ex.confirmation.push('icmp-reply');
+              if (ex) {
+                ex.confirmation.push('icmp-reply');
+                if (!ex.networkTag) ex.networkTag = `${prefix}.x`;
+                if (isLan) ex.isSameSubnetAsGateway = true;
+              }
             }
           }
         }
@@ -927,6 +946,7 @@ const deepScanner = {
     }
 
     allDevices.sort((a, b) => {
+      if (a.isSameSubnetAsGateway !== b.isSameSubnetAsGateway) return a.isSameSubnetAsGateway ? -1 : 1;
       const order = { 'tcp-connect': 0, 'arp-unique-mac': 1, 'icmp-reply': 2 };
       const aa = order[a.confirmation[0]] || 9;
       const bb = order[b.confirmation[0]] || 9;
@@ -935,7 +955,15 @@ const deepScanner = {
 
     const duration = Date.now() - start;
     const confirmedCount = allDevices.filter(d => d.isConfirmed).length;
-    logger.info(`[PROBE] ✅ المسح اليقيني: ${allDevices.length} جهاز (${confirmedCount} مؤكد) في ${duration}ms`);
+
+    const sameSubnetCount = allDevices.filter(d => d.isSameSubnetAsGateway).length;
+    const otherSubnetCount = allDevices.length - sameSubnetCount;
+    const networkStats = {};
+    allDevices.forEach(d => {
+      const tag = d.networkTag || 'Unknown';
+      networkStats[tag] = (networkStats[tag] || 0) + 1;
+    });
+    logger.info(`[PROBE] ✅ المسح اليقيني: ${allDevices.length} جهاز (${confirmedCount} مؤكد, ${sameSubnetCount} على شبكة الهوتسبوت) في ${duration}ms`);
 
     return {
       isSuccess: true,
@@ -944,6 +972,10 @@ const deepScanner = {
         gateway, ourIp,
         totalFound: allDevices.length,
         confirmedCount,
+        sameSubnetCount,
+        otherSubnetCount,
+        networkStats,
+        hotspotSubnet: gwPrefix ? `${gwPrefix}.x` : null,
         source: 'real-probe',
         _scanDuration: duration,
         _scanStart: new Date(start).toLocaleTimeString('ar-SA'),
@@ -959,4 +991,50 @@ const deepScanner = {
   },
 };
 
+function getOui(mac) {
+  if (!mac || mac === 'N/A' || mac === 'unknown') return null;
+  const clean = mac.toUpperCase().replace(/[-:]/g, '');
+  if (clean.length < 6) return null;
+  return clean.substring(0, 6);
+}
+
+function filterDuplicateOui(result) {
+  if (!result || !result.isSuccess || !result.value) return result;
+  const hosts = result.value.hosts;
+  if (!Array.isArray(hosts) || hosts.length === 0) return result;
+
+  const ouiCounts = {};
+  hosts.forEach(h => {
+    const oui = getOui(h.mac);
+    if (oui) ouiCounts[oui] = (ouiCounts[oui] || 0) + 1;
+  });
+
+  const dupOuis = new Set();
+  Object.entries(ouiCounts).forEach(([oui, count]) => {
+    if (count >= 2) dupOuis.add(oui);
+  });
+
+  let filteredCount = 0;
+  hosts.forEach(h => {
+    const oui = getOui(h.mac);
+    if (oui && dupOuis.has(oui)) {
+      h.duplicateOui = true;
+      filteredCount++;
+    } else {
+      h.duplicateOui = false;
+    }
+  });
+
+  const uniqueOuiCount = Object.keys(ouiCounts).filter(o => !dupOuis.has(o)).length;
+  result.value._ouiStats = {
+    totalOui: Object.keys(ouiCounts).length,
+    duplicateOui: dupOuis.size,
+    uniqueOui: uniqueOuiCount,
+    hostsWithDupOui: filteredCount,
+  };
+
+  return result;
+}
+
 module.exports = deepScanner;
+module.exports.filterDuplicateOui = filterDuplicateOui;

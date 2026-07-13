@@ -4,7 +4,7 @@
     "host": "0.0.0.0"
   },
   "hotspot": {
-    "url": "http://www.h.net/index.html",
+    "url": "http://m.net",
     "loginEndpoint": "/login",
     "logoutEndpoint": "/logout",
     "statusEndpoint": "/status",
@@ -12,9 +12,8 @@
     "passwordField": "password",
     "speedField": "domain",
     "passwordValue": "",
-    "extraParams": {
-      "var": "callBack"
-    }
+    "cardAsPassword": false,
+    "extraParams": {}
   },
   "network": {
     "ssid": "3D Net",

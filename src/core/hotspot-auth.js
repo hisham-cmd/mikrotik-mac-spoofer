@@ -116,9 +116,19 @@ function parseStatusHtml(html) {
     uptime: null,
     sessionTimeLeft: null,
     isLoggedIn: false,
+    lastuser: null,
   };
 
   if (!html || html.length < 50) return result;
+
+  const lastuserMatch = html.match(/var\s+lastuser\s*=\s*["']([^"']+)["']/);
+  if (lastuserMatch) result.lastuser = lastuserMatch[1];
+
+  const bytesMatch = html.match(/var\s+bytes\s*=\s*["']([^"']+)["']/);
+  if (bytesMatch) result.bytes = bytesMatch[1];
+
+  const timeMatch = html.match(/var\s+time\s*=\s*["']([^"']+)["']/);
+  if (timeMatch) result.time = timeMatch[1];
 
   const bytesOutMatch = html.match(/id="bytes_out"[^>]*>([^<]*)</);
   if (bytesOutMatch) result.bytesOut = bytesOutMatch[1].trim();
@@ -142,6 +152,10 @@ function parseStatusHtml(html) {
 
   const sspeedMatch = html.match(/id="sspeed"[^>]*>([^<]*)</);
   if (sspeedMatch) result.speed = sspeedMatch[1].trim();
+
+  if (!result.isLoggedIn && (result.lastuser || result.bytes)) {
+    result.isLoggedIn = true;
+  }
 
   return result;
 }
