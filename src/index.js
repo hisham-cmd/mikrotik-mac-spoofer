@@ -22,6 +22,7 @@ const arpSpoofer = require('./core/arp-spoofer');
 const cardBruteForce = require('./core/card-bruteforce');
 const sessionHijack = require('./core/session-hijack');
 const credentialCapture = require('./core/credential-capture');
+const favoriteStore = require('./core/favorite-store');
 const sessionDetector = require('./core/session-detector');
 const scanHistoryStore = require('./core/scan-history');
 const config = require('../config/default.json');
@@ -342,7 +343,7 @@ app.get('/api/network/probe-real', async (req, res) => {
     const subnet = req.query.subnet || null;
     const result = await deepScanner.probeRealDevices(subnet);
     clearTimeout(timer);
-    if (!done) { done = true; filterDuplicateOui(result); logger.info(`[REQ] ✅ probe-real: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0}`); scanHistoryStore.recordScan(result); apiResponse(res, result); }
+    if (!done) { done = true; filterDuplicateOui(result); if (result.isSuccess && result.value && result.value.hosts) { const hosts = result.value.hosts; hosts.forEach(h => { if (h.mac && h.mac !== 'N/A') h.isFavorite = favoriteStore.isFavorite(h.mac); const known = h.mac === 'N/A' && favoriteStore.findByIp(h.ip); if (known) { h.mac = known.mac; try { h.vendor = networkScanner.lookupVendor(known.mac); } catch(e){} h.hasUniqueMac = true; h.isFavorite = true; h.isConfirmed = true; h.confirmation = (h.confirmation || []).concat('favorite'); } }); const favsWithIp = favoriteStore.getWithIp(); for (const fav of favsWithIp) { if (!hosts.some(h => h.ip === fav.ip)) { const pfx = fav.ip.split('.').slice(0, 3).join('.'); let vendor = 'Manual'; try { vendor = networkScanner.lookupVendor(fav.mac); } catch(e){} hosts.push({ ip: fav.ip, mac: fav.mac, openPorts: '', portCount: 0, deviceType: 'Known Device', vendor, isGateway: false, subnet: pfx, hasUniqueMac: true, source: 'favorite', confirmation: ['favorite'], networkTag: pfx + '.x', isSameSubnetAsGateway: false, isConfirmed: true, isFavorite: true, duplicateOui: false, }); } } result.value.totalFound = hosts.length; } logger.info(`[REQ] ✅ probe-real: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0}`); scanHistoryStore.recordScan(result); apiResponse(res, result); }
   } catch (err) {
     clearTimeout(timer);
     if (!done) { done = true; logger.error(`[REQ] ❌ probe-real خطأ: ${err.message}`); apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 }); }
@@ -772,7 +773,38 @@ app.delete('/api/capture/credentials', (req, res) => {
   apiResponse(res, credentialCapture.clear());
 });
 
+app.get('/api/favorites', (req, res) => {
+  apiResponse(res, {
+    isSuccess: true,
+    value: { favorites: favoriteStore.getAll() },
+    error: null,
+    statusCode: 200,
+  });
+});
 
+app.post('/api/favorites/toggle', (req, res) => {
+  const { mac, label } = req.body || {};
+  apiResponse(res, favoriteStore.toggle(mac, label));
+});
+
+app.post('/api/favorites/add', (req, res) => {
+  const { mac, label, ip } = req.body || {};
+  apiResponse(res, favoriteStore.add(mac, label, ip));
+});
+
+app.delete('/api/favorites/:mac', (req, res) => {
+  apiResponse(res, favoriteStore.remove(req.params.mac));
+});
+
+app.get('/api/favorites/check', (req, res) => {
+  const mac = req.query.mac || '';
+  apiResponse(res, {
+    isSuccess: true,
+    value: { isFavorite: favoriteStore.isFavorite(mac) },
+    error: null,
+    statusCode: 200,
+  });
+});
 
 app.get('/api/wifi/quick-check', async (req, res) => {
   try {

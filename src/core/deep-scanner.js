@@ -940,8 +940,50 @@ const deepScanner = {
       }
     }
 
+    logger.info(`[PROBE] إعادة قراءة ARP cache للأجهزة الصامتة...`);
+    try {
+      const arpAfter = await new Promise(r => execFile('arp', ['-a'], { timeout: 5000 }, (err, out) => {
+        if (err) { r(new Map()); return; }
+        const seen = new Set(), map = new Map();
+        for (const line of ((out || '').split('\n'))) {
+          const m = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+([0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2}[-:][0-9A-Fa-f]{2})/);
+          if (m && !seen.has(m[1])) { seen.add(m[1]); map.set(m[1], m[2].toUpperCase().replace(/-/g, ':')); }
+        } r(map);
+      }));
+      for (const [ip, mac] of arpAfter) {
+        if (ip === gateway || ip === ourIp) continue;
+        if (mac === '00:00:00:00:00:00' || mac.startsWith('01:00:5E') || mac === 'FF:FF:FF:FF:FF:FF') continue;
+        if (gwMac && mac === gwMac && ip !== gateway) continue;
+        if (!confirmedSet.has(ip)) {
+          const prefix = ip.split('.').slice(0, 3).join('.');
+          const isLan = !!(gwPrefix && prefix === gwPrefix);
+          allDevices.push({
+            ip, mac, openPorts: '', portCount: 0,
+            deviceType: (parseInt(mac.split(':')[0], 16) & 2) ? 'Random MAC' : 'Client Device',
+            vendor: lookupVendor(mac),
+            isGateway: false, subnet: prefix, hasUniqueMac: true,
+            source: 'arp-after-sweep',
+            confirmation: ['arp-after-sweep'],
+            networkTag: `${prefix}.x`,
+            isSameSubnetAsGateway: isLan,
+          });
+          confirmedSet.add(ip);
+        } else {
+          const ex = allDevices.find(d => d.ip === ip && d.mac === 'N/A');
+          if (ex && mac && mac !== '00:00:00:00:00:00') {
+            ex.mac = mac;
+            ex.vendor = lookupVendor(mac);
+            ex.hasUniqueMac = true;
+            ex.confirmation.push('arp-after-sweep');
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn(`[PROBE] فشل إعادة قراءة ARP: ${e.message}`);
+    }
+
     for (const d of allDevices) {
-      d.isConfirmed = d.confirmation.includes('tcp-connect') || d.confirmation.includes('arp-unique-mac');
+      d.isConfirmed = d.confirmation.includes('tcp-connect') || d.confirmation.includes('arp-unique-mac') || d.confirmation.includes('arp-after-sweep');
       d.confirmMethod = d.confirmation.join('+');
     }
 

@@ -5,7 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "build": "node --check src/index.js && node --check src/cli/index.js && node --check src/utils/logger.js && node --check src/core/wifi-manager.js && node --check src/core/hotspot-auth.js && node --check src/core/proxy-server.js && node --check src/core/session-store.js && node --check src/core/quota-monitor.js && node --check src/core/card-rotator.js && node --check src/core/network-scanner.js && node --check src/core/deep-scanner.js && node --check src/core/arp-spoofer.js && node --check src/core/card-bruteforce.js && node --check src/core/session-hijack.js && node --check src/core/credential-capture.js && node --check src/core/session-detector.js && echo Build OK",
+    "build": "node --check src/index.js && node --check src/cli/index.js && node --check src/utils/logger.js && node --check src/core/wifi-manager.js && node --check src/core/hotspot-auth.js && node --check src/core/proxy-server.js && node --check src/core/session-store.js && node --check src/core/quota-monitor.js && node --check src/core/card-rotator.js && node --check src/core/network-scanner.js && node --check src/core/deep-scanner.js && node --check src/core/arp-spoofer.js && node --check src/core/card-bruteforce.js && node --check src/core/session-hijack.js && node --check src/core/credential-capture.js && node --check src/core/session-detector.js && node --check src/core/favorite-store.js && echo Build OK",
     "lint": "node -e \"try{require('eslint').Linter}catch(e){console.log('ESLint not installed')}\"",
     "cli": "node src/cli/index.js"
   },
