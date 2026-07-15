@@ -863,7 +863,7 @@ const deepScanner = {
 
     const gwPrefix = gateway ? gateway.split('.').slice(0, 3).join('.') : null;
     const PROBE_PORTS_LAN = [21, 22, 23, 53, 80, 135, 139, 443, 445, 8080, 8443, 3389, 5900, 9090, 10000, 3000, 5000];
-    const PROBE_PORTS_OTHER = [22, 80, 443, 8080, 8443, 3000, 5000, 9090];
+    const PROBE_PORTS_OTHER = [22, 53, 80, 443, 8080, 8443, 3000, 5000, 9090];
 
     const probeIP = (ip, isLan = false) => new Promise(res => {
       let done = false;
@@ -898,29 +898,6 @@ const deepScanner = {
         isSameSubnetAsGateway: !!(devPrefix && gwPrefix && devPrefix === gwPrefix),
       });
       confirmedSet.add(h.ip);
-    }
-
-    logger.info(`[PROBE] مسح ${prefixes.length} شبكة TCP: ${prefixes.join(', ')}`);
-    for (const prefix of prefixes) {
-      const isLan = !!(gwPrefix && prefix === gwPrefix);
-      const batchSize = isLan ? 20 : 25;
-      const ipList = Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
-      for (let b = 0; b < ipList.length; b += batchSize) {
-        const batch = ipList.slice(b, b + batchSize);
-        const results = await Promise.all(batch.map(ip => probeIP(ip, isLan)));
-        for (const r of results) {
-          if (r && !confirmedSet.has(r.ip)) {
-            r.mac = 'N/A'; r.deviceType = 'Web Server'; r.vendor = 'Unknown';
-            r.isGateway = false; r.subnet = prefix;
-            r.source = 'tcp-probe';
-            r.confirmation = ['tcp-connect'];
-            r.networkTag = `${prefix}.x`;
-            r.isSameSubnetAsGateway = isLan;
-            allDevices.push(r);
-            confirmedSet.add(r.ip);
-          }
-        }
-      }
     }
 
     logger.info(`[PROBE] ICMP Ping Sweep لـ ${prefixes.length} شبكة...`);
@@ -962,6 +939,29 @@ const deepScanner = {
       }
     }
 
+    logger.info(`[PROBE] مسح ${prefixes.length} شبكة TCP: ${prefixes.join(', ')}`);
+    for (const prefix of prefixes) {
+      const isLan = !!(gwPrefix && prefix === gwPrefix);
+      const batchSize = isLan ? 10 : 15;
+      const ipList = Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
+      for (let b = 0; b < ipList.length; b += batchSize) {
+        const batch = ipList.slice(b, b + batchSize);
+        const results = await Promise.all(batch.map(ip => probeIP(ip, isLan)));
+        for (const r of results) {
+          if (r && !confirmedSet.has(r.ip)) {
+            r.mac = 'N/A'; r.deviceType = 'Web Server'; r.vendor = 'Unknown';
+            r.isGateway = false; r.subnet = prefix;
+            r.source = 'tcp-probe';
+            r.confirmation = ['tcp-connect'];
+            r.networkTag = `${prefix}.x`;
+            r.isSameSubnetAsGateway = isLan;
+            allDevices.push(r);
+            confirmedSet.add(r.ip);
+          }
+        }
+      }
+    }
+
     logger.info(`[PROBE] إعادة قراءة ARP cache للأجهزة الصامتة...`);
     try {
       const arpAfter = await new Promise(r => execFile('arp', ['-a'], { timeout: 5000 }, (err, out) => {
@@ -975,7 +975,24 @@ const deepScanner = {
       for (const [ip, mac] of arpAfter) {
         if (ip === gateway || ip === ourIp) continue;
         if (mac === '00:00:00:00:00:00' || mac.startsWith('01:00:5E') || mac === 'FF:FF:FF:FF:FF:FF') continue;
-        if (gwMac && mac === gwMac && ip !== gateway) continue;
+        const isProxyArp = !!(gwMac && mac === gwMac && ip !== gateway);
+        if (isProxyArp) {
+          if (!confirmedSet.has(ip)) {
+            const prefix = ip.split('.').slice(0, 3).join('.');
+            const isLan = !!(gwPrefix && prefix === gwPrefix);
+            allDevices.push({
+              ip, mac: 'N/A', openPorts: '', portCount: 0,
+              deviceType: 'Behind Proxy-ARP', vendor: 'Unknown',
+              isGateway: false, subnet: prefix, hasUniqueMac: false,
+              source: 'arp-proxy',
+              confirmation: ['arp-proxy'],
+              networkTag: `${prefix}.x`,
+              isSameSubnetAsGateway: isLan,
+            });
+            confirmedSet.add(ip);
+          }
+          continue;
+        }
         if (!confirmedSet.has(ip)) {
           const prefix = ip.split('.').slice(0, 3).join('.');
           const isLan = !!(gwPrefix && prefix === gwPrefix);
@@ -990,7 +1007,7 @@ const deepScanner = {
             isSameSubnetAsGateway: isLan,
           });
           confirmedSet.add(ip);
-        } else {
+        } else if (!isProxyArp) {
           const ex = allDevices.find(d => d.ip === ip && d.mac === 'N/A');
           if (ex && mac && mac !== '00:00:00:00:00:00') {
             ex.mac = mac;

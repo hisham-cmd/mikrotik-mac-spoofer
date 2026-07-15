@@ -370,13 +370,15 @@ app.get('/api/network/probe-real', async (req, res) => {
         }
         hosts.sort((a, b) => {
           if (a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1;
-          const order = { 'tcp-connect': 0, 'arp-unique-mac': 1, 'arp-after-sweep': 2, 'icmp-reply': 3 };
+          const order = { 'tcp-connect': 0, 'arp-unique-mac': 1, 'arp-after-sweep': 2, 'icmp-reply': 3, 'arp-proxy': 4, 'favorite': 5 };
           const aC = a.confirmation ? a.confirmation[0] : '';
           const bC = b.confirmation ? b.confirmation[0] : '';
           return (order[aC] || 9) - (order[bC] || 9);
         });
         result.value.hosts = hosts;
         result.value.totalFound = hosts.length;
+        result.value.confirmedCount = hosts.filter(h => h.isConfirmed).length;
+        result.value.sameSubnetCount = hosts.filter(h => h.isSameSubnetAsGateway).length;
       }
       if (result.isSuccess && result.value && !result.value.ssid) {
         result.value.ssid = '-';
