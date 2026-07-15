@@ -113,6 +113,7 @@ const scanHistoryStore = {
       timestamp: s.timestamp,
       gateway: s.gateway,
       ourIp: s.ourIp,
+      ssid: s.ssid || '',
       totalFound: s.totalFound,
       networkType: s.networkType,
       source: s.source,

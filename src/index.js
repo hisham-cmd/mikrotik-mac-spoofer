@@ -343,7 +343,48 @@ app.get('/api/network/probe-real', async (req, res) => {
     const subnet = req.query.subnet || null;
     const result = await deepScanner.probeRealDevices(subnet);
     clearTimeout(timer);
-    if (!done) { done = true; filterDuplicateOui(result); if (result.isSuccess && result.value && result.value.hosts) { const hosts = result.value.hosts; hosts.forEach(h => { if (h.mac && h.mac !== 'N/A') h.isFavorite = favoriteStore.isFavorite(h.mac); const known = h.mac === 'N/A' && favoriteStore.findByIp(h.ip); if (known) { h.mac = known.mac; try { h.vendor = networkScanner.lookupVendor(known.mac); } catch(e){} h.hasUniqueMac = true; h.isFavorite = true; h.isConfirmed = true; h.confirmation = (h.confirmation || []).concat('favorite'); } }); const favsWithIp = favoriteStore.getWithIp(); for (const fav of favsWithIp) { if (!hosts.some(h => h.ip === fav.ip)) { const pfx = fav.ip.split('.').slice(0, 3).join('.'); let vendor = 'Manual'; try { vendor = networkScanner.lookupVendor(fav.mac); } catch(e){} hosts.push({ ip: fav.ip, mac: fav.mac, openPorts: '', portCount: 0, deviceType: 'Known Device', vendor, isGateway: false, subnet: pfx, hasUniqueMac: true, source: 'favorite', confirmation: ['favorite'], networkTag: pfx + '.x', isSameSubnetAsGateway: false, isConfirmed: true, isFavorite: true, duplicateOui: false, }); } } result.value.totalFound = hosts.length; } logger.info(`[REQ] ✅ probe-real: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0}`); scanHistoryStore.recordScan(result); apiResponse(res, result); }
+    if (!done) {
+      done = true;
+      filterDuplicateOui(result);
+      if (result.isSuccess && result.value && result.value.hosts) {
+        let hosts = result.value.hosts;
+
+        hosts.forEach(h => {
+          if (h.mac && h.mac !== 'N/A') h.isFavorite = favoriteStore.isFavorite(h.mac);
+          const known = h.mac === 'N/A' && favoriteStore.findByIp(h.ip);
+          if (known) {
+            h.mac = known.mac;
+            try { h.vendor = networkScanner.lookupVendor(known.mac); } catch(e){}
+            h.hasUniqueMac = true;
+            h.isFavorite = true;
+            h.isConfirmed = true;
+            h.confirmation = (h.confirmation || []).concat('favorite');
+          }
+        });
+
+        let wifiIp = '';
+        try { const info = await wifiManager.getAdapterInfo(); wifiIp = info.ipAddress || ''; } catch {}
+        if (wifiIp) {
+          const prefix = wifiIp.split('.').slice(0, 3).join('.');
+          hosts = hosts.filter(h => h.ip && h.ip.startsWith(prefix));
+        }
+        hosts.sort((a, b) => {
+          if (a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1;
+          const order = { 'tcp-connect': 0, 'arp-unique-mac': 1, 'arp-after-sweep': 2, 'icmp-reply': 3 };
+          const aC = a.confirmation ? a.confirmation[0] : '';
+          const bC = b.confirmation ? b.confirmation[0] : '';
+          return (order[aC] || 9) - (order[bC] || 9);
+        });
+        result.value.hosts = hosts;
+        result.value.totalFound = hosts.length;
+      }
+      if (result.isSuccess && result.value && !result.value.ssid) {
+        result.value.ssid = '-';
+      }
+      logger.info(`[REQ] ✅ probe-real: success=${result.isSuccess} total=${result.value ? result.value.totalFound : 0}`);
+      scanHistoryStore.recordScan(result);
+      apiResponse(res, result);
+    }
   } catch (err) {
     clearTimeout(timer);
     if (!done) { done = true; logger.error(`[REQ] ❌ probe-real خطأ: ${err.message}`); apiResponse(res, { isSuccess: false, value: null, error: err.message, statusCode: 500 }); }
@@ -556,7 +597,11 @@ app.post('/api/hijack', async (req, res) => {
     return;
   }
   try {
-    const hijackOptions = { strategy: strategy || 'smart-auto' };
+    const hijackOptions = { strategy: strategy || 'smart-auto', ssid: req.body.ssid || '' };
+    if (req.body.forceIp) {
+      hijackOptions.forceIp = req.body.forceIp;
+      hijackOptions.forceGateway = req.body.forceGateway || '';
+    }
     const result = mode === 'full'
       ? await sessionHijack.fullHijack(targetIp, targetMac, hijackOptions)
       : await sessionHijack.quickHijack(targetIp, targetMac, hijackOptions);

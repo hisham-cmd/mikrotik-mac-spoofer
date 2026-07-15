@@ -693,6 +693,22 @@ const deepScanner = {
 
       let scanSsid = '';
       try { const q = await wifiManager.quickCheck(); if (q && q.ssid) scanSsid = q.ssid; } catch {}
+      if (scanSsid) {
+        try {
+          const info = await wifiManager.getAdapterInfo();
+          const wg = info.gateway;
+          const wi = info.ipAddress;
+          const wm = info.macAddress;
+          if (wg && wi) {
+            gateway = wg; ourIp = wi; ourMac = wm || ourMac;
+            logger.info(`[SCAN] WiFi override — Gateway: ${gateway}, IP: ${ourIp}`);
+          } else if (wi) {
+            ourIp = wi; ourMac = wm || ourMac;
+            const parts = wi.split('.'); gateway = parts.slice(0,3).join('.')+'.1';
+            logger.info(`[SCAN] WiFi override (derived) — Gateway: ${gateway}, IP: ${ourIp}`);
+          } else logger.warn('[SCAN] WiFi override: no gateway/IP from adapter info');
+        } catch (e) { logger.warn(`[SCAN] WiFi override error: ${e.message}`); }
+      }
       const uniqueCount = hosts.filter(h => h.hasUniqueMac).length;
       logger.info(`[SCAN] ✅ ARP Only: ${hosts.length} أجهزة في ${Date.now()-start}ms`);
       return {
@@ -802,12 +818,18 @@ const deepScanner = {
     const start = Date.now();
     logger.info(`[PROBE] بدء المسح اليقيني للأجهزة الحقيقية: subnet=${subnet || 'auto'}`);
 
-    let ourIp = null, gateway = null, arpRet = null;
+    let ourIp = null, gateway = null, ourMac = null, arpRet = null;
+    let currentSsid = '';
+    try {
+      const q = await wifiManager.quickCheck();
+      if (q && q.ssid) currentSsid = q.ssid;
+    } catch (e) {}
     try {
       arpRet = await this.arpOnly();
       if (arpRet.isSuccess) {
         gateway = arpRet.value.gateway;
         ourIp = arpRet.value.ourIp;
+        ourMac = arpRet.value.ourMac;
       }
     } catch (e) {}
 
@@ -1011,7 +1033,8 @@ const deepScanner = {
       isSuccess: true,
       value: {
         hosts: allDevices,
-        gateway, ourIp,
+        gateway, ourIp, ourMac,
+        ssid: currentSsid,
         totalFound: allDevices.length,
         confirmedCount,
         sameSubnetCount,
@@ -1045,34 +1068,36 @@ function filterDuplicateOui(result) {
   const hosts = result.value.hosts;
   if (!Array.isArray(hosts) || hosts.length === 0) return result;
 
-  const ouiCounts = {};
+  const fullMacCounts = {};
   hosts.forEach(h => {
-    const oui = getOui(h.mac);
-    if (oui) ouiCounts[oui] = (ouiCounts[oui] || 0) + 1;
+    if (h.mac && h.mac !== 'N/A' && h.mac !== 'unknown') {
+      const clean = h.mac.toUpperCase().replace(/[-:]/g, '');
+      if (clean.length >= 12) fullMacCounts[clean] = (fullMacCounts[clean] || 0) + 1;
+    }
   });
 
-  const dupOuis = new Set();
-  Object.entries(ouiCounts).forEach(([oui, count]) => {
-    if (count >= 2) dupOuis.add(oui);
+  const dupMacs = new Set();
+  Object.entries(fullMacCounts).forEach(([mac, count]) => {
+    if (count >= 2) dupMacs.add(mac);
   });
 
   let filteredCount = 0;
   hosts.forEach(h => {
-    const oui = getOui(h.mac);
-    if (oui && dupOuis.has(oui)) {
-      h.duplicateOui = true;
-      filteredCount++;
-    } else {
-      h.duplicateOui = false;
+    if (h.mac && h.mac !== 'N/A' && h.mac !== 'unknown') {
+      const clean = h.mac.toUpperCase().replace(/[-:]/g, '');
+      if (clean.length >= 12 && dupMacs.has(clean)) {
+        h.duplicateOui = true;
+        filteredCount++;
+        return;
+      }
     }
+    h.duplicateOui = false;
   });
 
-  const uniqueOuiCount = Object.keys(ouiCounts).filter(o => !dupOuis.has(o)).length;
   result.value._ouiStats = {
-    totalOui: Object.keys(ouiCounts).length,
-    duplicateOui: dupOuis.size,
-    uniqueOui: uniqueOuiCount,
-    hostsWithDupOui: filteredCount,
+    totalUniqueMacs: Object.keys(fullMacCounts).length,
+    duplicateMacs: dupMacs.size,
+    hostsWithDupMac: filteredCount,
   };
 
   return result;

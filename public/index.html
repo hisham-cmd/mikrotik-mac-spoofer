@@ -577,6 +577,16 @@
       </select>
       <div style="font-size:.65rem;color:rgba(255,255,255,0.3);margin-top:4px" id="hjStrategyDesc">🧠 يجرب API الراوتر ← انتظار الجلسة ← التخمين ← وأخيراً الكروت إن وُجدت</div>
     </div>
+    <div class="fg" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06)">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="hjForceIp" checked>
+        <span>🌐 فرض IP ثابت بعد تغيير MAC</span>
+      </label>
+    </div>
+    <div id="hjForceIpFields" style="background:rgba(99,102,241,0.06);border-radius:10px;padding:10px;margin-top:6px">
+      <div class="fg"><label>الـ IP</label><input type="text" id="hjForceIpVal" dir="ltr" style="font-family:monospace"></div>
+      <div class="fg"><label>البوابة</label><input type="text" id="hjForceGwVal" dir="ltr" style="font-family:monospace" placeholder="10.94.1.1"></div>
+    </div>
     <div class="ma"><button class="btn btn-d" id="btnHjCancel">إلغاء</button><button class="btn btn-s" id="btnHjConfirm">🚀 بدء الاختراق</button></div>
   </div>
 </div>
@@ -801,13 +811,14 @@ async function scanNetwork(mode){
     if(!r.isSuccess){toast(r.error||'فشل','e');stepsEl.style.display='none';return}
     const d=r.value||{};scanData=d;
     document.getElementById('sGateway').textContent=d.gateway||'-';
+    window._lastGateway=d.gateway||window._lastGateway||'';
     document.getElementById('sOurIp').textContent=d.ourIp||'-';
     document.getElementById('sOurMac').textContent=d.ourMac||'-';
     document.getElementById('sCount').textContent=d.totalFound||0;
     const potentialCount=d.potentialUserCount||0;
     const sCountEl=document.getElementById('sCount');
     if(potentialCount>0){sCountEl.textContent=d.totalFound+' 🔥'+potentialCount}else{sCountEl.textContent=d.totalFound||0}
-    if(d._ouiStats){document.getElementById('sSource').textContent=(d.source||'-')+' | 🔁 '+d._ouiStats.hostsWithDupOui+' مشبوه'}else{if(d.source==='real-probe'&&d.confirmedCount!==undefined){document.getElementById('sSource').textContent='🎯 مسح يقيني ('+d.confirmedCount+' مؤكد)'}else{document.getElementById('sSource').textContent=d.source||'-'}}
+    if(d._ouiStats){document.getElementById('sSource').textContent=(d.source||'-')+' | 🔁 '+d._ouiStats.hostsWithDupMac+' مشبوه'}else{if(d.source==='real-probe'&&d.confirmedCount!==undefined){document.getElementById('sSource').textContent='🎯 مسح يقيني ('+d.confirmedCount+' مؤكد)'}else{document.getElementById('sSource').textContent=d.source||'-'}}
     const proxyInfo=document.getElementById('sProxyInfo');
     if(proxyInfo){
       const totalProxy=d.totalProxyIps||0;
@@ -867,7 +878,7 @@ async function scanNetwork(mode){
         <td style="font-size:.65rem;color:rgba(255,255,255,0.4)">${h.source||'-'}</td>
         <td>${typeIcon}</td>
         <td style="display:flex;gap:3px;flex-wrap:wrap">
-          ${h.isGateway?'<span style="color:rgba(255,255,255,0.3);font-size:.7rem;padding:4px 8px">🚪 البوابة</span>':(h.hasUniqueMac||h.isConfirmed)&&h.mac&&h.mac!=='N/A'&&!h.duplicateOui?`<button class="btn btn-s btn-sm" onclick='hijackTarget(${JSON.stringify({ip:h.ip,mac:h.mac,vendor:h.deviceType||h.vendor}).replace(/'/g,"\\'")})'>🎯 اختراق</button>`:h.duplicateOui?'<span style="color:rgba(255,255,255,0.15);font-size:.65rem">🔁 OUI مشترك</span>':'<span style="color:rgba(255,255,255,0.15);font-size:.65rem">⚙️ proxy</span>'}
+          ${h.isGateway?'<span style="color:rgba(255,255,255,0.3);font-size:.7rem;padding:4px 8px">🚪 البوابة</span>':(h.hasUniqueMac||h.isConfirmed)&&h.mac&&h.mac!=='N/A'&&!h.duplicateOui?`<button class="btn btn-s btn-sm" onclick='hijackTarget(${JSON.stringify({ip:h.ip,mac:h.mac,vendor:h.deviceType||h.vendor,ssid:h.ssid||scanSsid}).replace(/'/g,"\\'")})'>🎯 اختراق</button>`:h.duplicateOui?'<span style="color:rgba(255,255,255,0.15);font-size:.65rem">🔁 OUI مشترك</span>':'<span style="color:rgba(255,255,255,0.15);font-size:.65rem">⚙️ proxy</span>'}
           ${h.isGateway?'':`<button class="btn btn-d btn-sm" onclick='disconnectTarget(${JSON.stringify({ip:h.ip,mac:h.mac}).replace(/'/g,"\\'")})'>🔌 فصل</button>`}
         </td></tr>`
       }).join('')
@@ -902,6 +913,8 @@ function hijackTarget(h){
   document.getElementById('hjTargetName').textContent=h.vendor+' ('+h.ip+')';
   document.getElementById('hjTargetIp').textContent=h.ip;
   document.getElementById('hjTargetMac').textContent=h.mac;
+  document.getElementById('hjForceIpVal').value=h.ip;
+  document.getElementById('hjForceGwVal').value=window._lastGateway||'10.94.1.1';
   window._hjTarget=h;
   document.getElementById('hijackModal').classList.add('on');
   analyzeHijackTarget(h.ip, h.mac);
@@ -992,6 +1005,7 @@ document.getElementById('btnRefCards').addEventListener('click',loadCards);
 
 document.getElementById('btnHjCancel').addEventListener('click',()=>document.getElementById('hijackModal').classList.remove('on'));
 document.getElementById('hijackModal').addEventListener('click',e=>{if(e.target===document.getElementById('hijackModal'))document.getElementById('hijackModal').classList.remove('on')});
+document.getElementById('hjForceIp').addEventListener('change',function(){document.getElementById('hjForceIpFields').style.display=this.checked?'block':'none'});
 
 let hijackSse = null;
 
@@ -1181,8 +1195,13 @@ document.getElementById('btnHjConfirm').addEventListener('click', async () => {
   addHijackLog('🚀 بدء اختراق ' + h.ip + ' (' + (mode === 'full' ? 'كامل' : 'سريع') + ') [استراتيجية: ' + (strategyDescs[strategy] || strategy) + ']');
   updateHijackStep('save_original_mac', 'running');
 
+  const body = { targetIp: h.ip, targetMac: h.mac, mode, strategy, ssid: h.ssid || '' };
+  if (document.getElementById('hjForceIp').checked) {
+    const forceIp = document.getElementById('hjForceIpVal').value.trim();
+    if (forceIp) { body.forceIp = forceIp; body.forceGateway = document.getElementById('hjForceGwVal').value.trim(); }
+  }
   try {
-    const r = await API.post('/api/hijack', { targetIp: h.ip, targetMac: h.mac, mode, strategy });
+    const r = await API.post('/api/hijack', body);
     if (r.isSuccess) {
       const strategyResult = r.value && r.value.strategy ? ' [via: ' + r.value.strategy + ']' : '';
       addHijackLog('✅✅✅ اختراق ناجح!' + strategyResult, 'success');
