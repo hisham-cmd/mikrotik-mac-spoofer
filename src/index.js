@@ -597,7 +597,7 @@ app.post('/api/hijack', async (req, res) => {
     return;
   }
   try {
-    const hijackOptions = { strategy: strategy || 'smart-auto', ssid: req.body.ssid || '' };
+    const hijackOptions = { strategy: strategy || 'session-capture', ssid: req.body.ssid || '' };
     if (req.body.forceIp) {
       hijackOptions.forceIp = req.body.forceIp;
       hijackOptions.forceGateway = req.body.forceGateway || '';

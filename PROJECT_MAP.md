@@ -42,12 +42,13 @@ PowerShell Layer (scripts/) ← ARP scan, MAC spoof, WiFi info
 - `scripts/scan-power.ps1`: فحص خارق — SNMP, REST API, Web scraping, mDNS, NetBIOS, DNS, ICMP sweep, port scan, banner grab
 
 ## V2.0 New Features
-- **Multi-Strategy Hijack Engine**: 5 استراتيجيات اختراق متاحة
+- **Multi-Strategy Hijack Engine**: 6 استراتيجيات اختراق متاحة
+  - `session-capture`: 🎯 اقتناص الجلسة — انتحال MAC وجلب lastuser من صفحة الحالة مباشرة (افتراضي جديد)
   - `session-wait`: انتظار الجلسة (الطريقة الأصلية) — يعمل إذا كانت الجلسة نشطة مسبقاً
   - `card-login`: تسجيل الدخول بالكروت — يستخدم الكروت المخزنة (موثوق)
   - `api-session`: API الراوتر — يتحقق من وجود جلسة للهدف عبر REST API
   - `brute-force`: تخمين الكروت — يجرب أرقام عشوائية مع تدوير MAC عند الحظر
-  - `smart-auto`: ذكي — يجرب جميع الاستراتيجيات بالتسلسل (افتراضي)
+  - `smart-auto`: ذكي — يجرب جميع الاستراتيجيات بالتسلسل
 - **Network Analysis Endpoint**: `POST /api/hijack/analyze` — يحلل الاستراتيجيات المناسبة للهدف
 - **Dashboard Strategy Selector**: اختيار الاستراتيجية مع توصية ذكية
 - **Error Messages Mole**: رسائل خطأ محددة لكل استراتيجية (بدلاً من "hotspot not reachable" الموحّد)

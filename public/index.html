@@ -568,13 +568,14 @@
     <div id="hjTargetInfo" style="display:none;font-size:.7rem;color:rgba(255,255,255,0.45);margin-bottom:8px;padding:6px 10px;background:rgba(99,102,241,0.08);border-radius:8px"></div>
     <div class="fg" style="margin-bottom:8px">
       <label>الاستراتيجية <span id="hjRecBadge" class="badge idle" style="display:none"></span></label>
-      <select id="hjStrategy">
-        <option value="smart-auto" selected>🧠 ذكي — جرب كل الطرق تلقائياً</option>
-        <option value="card-login">💳 تسجيل الدخول بالكروت</option>
-        <option value="session-wait">⏳ انتظار الجلسة (الطريقة الأصلية)</option>
-        <option value="api-session">📡 API الراوتر</option>
-        <option value="brute-force">⚡ تخمين الكروت</option>
-      </select>
+<select id="hjStrategy">
+  <option value="session-capture" selected>🎯 اقتناص الجلسة — انتحال وجلب lastuser مباشرة</option>
+  <option value="smart-auto">🧠 ذكي — جرب كل الطرق تلقائياً</option>
+  <option value="card-login">💳 تسجيل الدخول بالكروت</option>
+  <option value="session-wait">⏳ انتظار الجلسة (الطريقة الأصلية)</option>
+  <option value="api-session">📡 API الراوتر</option>
+  <option value="brute-force">⚡ تخمين الكروت</option>
+</select>
       <div style="font-size:.65rem;color:rgba(255,255,255,0.3);margin-top:4px" id="hjStrategyDesc">🧠 يجرب API الراوتر ← انتظار الجلسة ← التخمين ← وأخيراً الكروت إن وُجدت</div>
     </div>
     <div class="fg" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06)">
@@ -1173,7 +1174,8 @@ document.getElementById('hijackProgressModal').addEventListener('click', functio
 });
 
 const strategyDescs = {
-  'smart-auto': '🧠 يجرب API الراوتر أولاً، ثم انتظار الجلسة، ثم الكروت، وأخيراً التخمين',
+  'session-capture': '🎯 انتحال MAC وجلب lastuser من صفحة الحالة مباشرة — أسرع استراتيجية',
+  'smart-auto': '🧠 يجرب اقتناص الجلسة أولاً، ثم API الراوتر، ثم انتظار الجلسة، ثم الكروت، وأخيراً التخمين',
   'card-login': '💳 الكروت المخزنة — الملاذ الأخير بعد فشل كل الطرق',
   'session-wait': '⏳ الطريقة الأصلية: انتحال MAC وانتظار تفعيل الجلسة',
   'api-session': '📡 يتصل بـ API الراوتر للبحث عن جلسة نشطة للهدف',

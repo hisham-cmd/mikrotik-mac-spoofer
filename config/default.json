@@ -32,7 +32,7 @@
     "timeout": 5000
   },
   "hijack": {
-    "defaultStrategy": "smart-auto",
+    "defaultStrategy": "session-capture",
     "blockedGatewayMac": "DC:2C:6E:31:06:A2",
     "sessionWaitMaxSec": 35,
     "cardLoginMaxCards": 10,
