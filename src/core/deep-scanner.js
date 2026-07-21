@@ -884,7 +884,7 @@ const deepScanner = {
     });
 
     const confirmedSet = new Set();
-    const allDevices = [];
+    let allDevices = [];
 
     for (const h of uniqueArpHosts) {
       const devPrefix = h.subnet || (h.ip ? h.ip.split('.').slice(0, 3).join('.') : null);
@@ -919,7 +919,7 @@ const deepScanner = {
               allDevices.push({
                 ip, mac: 'N/A', openPorts: '', portCount: 0,
                 deviceType: 'Client Device', vendor: 'Unknown',
-                isGateway: false, subnet: prefix,
+                isGateway: false, subnet: prefix, hasUniqueMac: false,
                 source: 'icmp-sweep',
                 confirmation: ['icmp-reply'],
                 networkTag: `${prefix}.x`,
@@ -949,9 +949,10 @@ const deepScanner = {
         const results = await Promise.all(batch.map(ip => probeIP(ip, isLan)));
         for (const r of results) {
           if (r && !confirmedSet.has(r.ip)) {
-            r.mac = 'N/A'; r.deviceType = 'Web Server'; r.vendor = 'Unknown';
+            r.mac = 'N/A'; r.deviceType = ''; r.vendor = 'Unknown';
             r.isGateway = false; r.subnet = prefix;
             r.source = 'tcp-probe';
+            r.hasUniqueMac = false;
             r.confirmation = ['tcp-connect'];
             r.networkTag = `${prefix}.x`;
             r.isSameSubnetAsGateway = isLan;
@@ -1021,13 +1022,72 @@ const deepScanner = {
       logger.warn(`[PROBE] فشل إعادة قراءة ARP: ${e.message}`);
     }
 
+    // Analyze port frequency to detect phantom responses
+    const totalIps = prefixes.reduce((sum) => sum + 254, 0);
+    const portCounts = {};
     for (const d of allDevices) {
-      d.isConfirmed = d.confirmation.includes('tcp-connect') || d.confirmation.includes('arp-unique-mac') || d.confirmation.includes('arp-after-sweep');
+      if (d.openPorts) {
+        for (const p of d.openPorts.split(',').filter(Boolean).map(Number)) {
+          portCounts[p] = (portCounts[p] || 0) + 1;
+        }
+      }
+    }
+    const phantomThreshold = Math.max(Math.round(totalIps * 0.25), 30);
+    const phantomPorts = new Set();
+    for (const [port, count] of Object.entries(portCounts)) {
+      if (count > phantomThreshold) phantomPorts.add(Number(port));
+    }
+    if (phantomPorts.size > 0) {
+      logger.info(`[PROBE] منافذ خادعة: ${[...phantomPorts].join(', ')} (تظهر في ${[...phantomPorts].map(p => `${p}:${portCounts[p]}`).join(', ')} من أصل ${totalIps} عنوان)`);
+    }
+
+    for (const d of allDevices) {
       d.confirmMethod = d.confirmation.join('+');
+      const hasArpConfirm = d.confirmation.includes('arp-unique-mac') || d.confirmation.includes('arp-after-sweep');
+      const hasUniqueMac = d.mac && d.mac !== 'N/A' && d.hasUniqueMac;
+      let isPhantom = false;
+
+      if (hasArpConfirm) {
+        d.isConfirmed = true;
+      } else if (d.mac === 'N/A' && d.openPorts) {
+        const ports = d.openPorts.split(',').filter(Boolean).map(Number);
+        const hasRealPort = ports.some(p => !phantomPorts.has(p));
+        d.isConfirmed = hasRealPort;
+        if (!hasRealPort) isPhantom = true;
+      } else if (d.mac && d.mac !== 'N/A' && d.openPorts) {
+        const ports = d.openPorts.split(',').filter(Boolean).map(Number);
+        d.isConfirmed = ports.some(p => !phantomPorts.has(p)) || hasUniqueMac;
+      } else if (d.mac === 'N/A' && !d.openPorts && !hasArpConfirm && d.isSameSubnetAsGateway) {
+        isPhantom = true;
+        d.isConfirmed = false;
+      } else {
+        d.isConfirmed = hasUniqueMac || hasArpConfirm;
+      }
+
+      d.isPhantom = isPhantom;
+    }
+
+    // Remove phantom devices
+    const beforeFilter = allDevices.length;
+    allDevices = allDevices.filter(d => !d.isPhantom);
+    const phantomCount = beforeFilter - allDevices.length;
+    if (phantomCount > 0) logger.info(`[PROBE] تمت إزالة ${phantomCount} جهازًا وهميًا (منافذ خادعة)`);
+
+    // Classify device type properly for probe-discovered devices
+    for (const d of allDevices) {
+      if (d.source === 'icmp-sweep' || d.source === 'tcp-probe') {
+        d.deviceType = classifyDevice({
+          ip: d.ip, mac: d.mac, ttl: d.ttl || '',
+          openPorts: d.openPorts || '', source: d.source,
+          isGateway: false, macUnique: d.mac && d.mac !== 'N/A',
+        }, 0);
+      }
     }
 
     allDevices.sort((a, b) => {
       if (a.isSameSubnetAsGateway !== b.isSameSubnetAsGateway) return a.isSameSubnetAsGateway ? -1 : 1;
+      if (a.isConfirmed !== b.isConfirmed) return a.isConfirmed ? -1 : 1;
+      if (a.hasUniqueMac !== b.hasUniqueMac) return a.hasUniqueMac ? -1 : 1;
       const order = { 'tcp-connect': 0, 'arp-unique-mac': 1, 'icmp-reply': 2 };
       const aa = order[a.confirmation[0]] || 9;
       const bb = order[b.confirmation[0]] || 9;

@@ -82,7 +82,8 @@ const credentialCapture = {
   async fetchLastuser(hotspotUrl) {
     if (!hotspotUrl) return { isSuccess: false, value: null, error: 'No hotspot URL', statusCode: 400 };
 
-    const statusUrl = hotspotUrl.replace(/\/+$/, '').replace(/\/index\.html$/, '') + '/status';
+    const base = hotspotUrl.replace(/\/+$/, '').replace(/\/index\.html$/, '');
+    const statusUrl = base + '/status';
     try {
       const resp = await axios.get(statusUrl, {
         timeout: 5000,
@@ -90,7 +91,28 @@ const credentialCapture = {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       });
       const html = typeof resp.data === 'string' ? resp.data : '';
-      const lastuser = this.parseLastuser(html);
+
+      // Method 1: Old HTML method (var lastuser = "...")
+      let lastuser = this.parseLastuser(html);
+
+      // Method 2: New JSON/JSONP method
+      if (!lastuser) {
+        lastuser = this.parseLastuserFromJson(html);
+      }
+
+      // Method 3: Request /status?var=x (JSON endpoint that some hotspots use)
+      if (!lastuser) {
+        try {
+          const jsonpResp = await axios.get(statusUrl + '?var=x', {
+            timeout: 5000,
+            validateStatus: () => true,
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+          });
+          const jsonpData = typeof jsonpResp.data === 'string' ? jsonpResp.data : JSON.stringify(jsonpResp.data);
+          lastuser = this.parseLastuserFromJson(jsonpData);
+        } catch (_) {}
+      }
+
       const bytes = this.parseVar(html, 'bytes');
       const time = this.parseVar(html, 'time');
       const sessionActive = !!(lastuser || html.includes('remain_bytes_total') || html.includes('تم تسجيل'));
@@ -117,6 +139,21 @@ const credentialCapture = {
     if (!html) return null;
     const match = html.match(/var\s+lastuser\s*=\s*["']([^"']+)["']/);
     return match ? match[1] : null;
+  },
+
+  parseLastuserFromJson(html) {
+    if (!html) return null;
+    // Try JSONP: callback({...})
+    const jsonpMatch = html.match(/[{]\s*"logged_in"\s*:\s*(?:true|false)\s*,\s*"username"\s*:\s*"([^"]+)"/s);
+    if (jsonpMatch) return jsonpMatch[1];
+    // Try raw JSON
+    try {
+      const parsed = JSON.parse(html);
+      if (parsed.username) return parsed.username;
+    } catch (_) {}
+    // Fallback: generic "username" key anywhere in text
+    const genericMatch = html.match(/"username"\s*:\s*"([^"]+)"/);
+    return genericMatch ? genericMatch[1] : null;
   },
 
   parseVar(html, name) {

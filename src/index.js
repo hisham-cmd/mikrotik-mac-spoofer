@@ -370,6 +370,7 @@ app.get('/api/network/probe-real', async (req, res) => {
         }
         hosts.sort((a, b) => {
           if (a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1;
+          if (a.hasUniqueMac !== b.hasUniqueMac) return a.hasUniqueMac ? -1 : 1;
           const order = { 'tcp-connect': 0, 'arp-unique-mac': 1, 'arp-after-sweep': 2, 'icmp-reply': 3, 'arp-proxy': 4, 'favorite': 5 };
           const aC = a.confirmation ? a.confirmation[0] : '';
           const bC = b.confirmation ? b.confirmation[0] : '';
